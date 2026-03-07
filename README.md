@@ -88,6 +88,107 @@ docker network connect openclaw-net napcat
 ```
 
 
+## 配置
+
+### 单账号配置（简化格式）
+
+```json
+{
+  "channels": {
+    "onebot": {
+      "enabled": true,
+      "type": "forward-websocket",
+      "host": "napcat",
+      "port": 3001,
+      "accessToken": "your-token",
+      "requireMention": true,
+      "groupHistoryOnMention": true
+    }
+  }
+}
+```
+
+### 多账号配置
+
+支持多个 QQ 账号同时连接，每个账号可绑定不同的 Agent：
+
+```json
+{
+  "channels": {
+    "onebot": {
+      "enabled": true,
+      "requireMention": true,
+      "groupHistoryOnMention": true,
+      "accounts": {
+        "main": {
+          "type": "backward-websocket",
+          "port": 18790,
+          "accessToken": "token-main"
+        },
+        "stock-picker": {
+          "type": "forward-websocket",
+          "host": "napcat-stock",
+          "port": 3001,
+          "accessToken": "token-stock"
+        },
+        "macro": {
+          "type": "forward-websocket",
+          "host": "napcat-macro",
+          "port": 3011,
+          "accessToken": "token-macro"
+        }
+      }
+    }
+  },
+  "agents": {
+    "list": [
+      { "id": "main", "default": true },
+      { "id": "stock-picker", "workspace": "/path/to/workspace-stock-picker" },
+      { "id": "macro", "workspace": "/path/to/workspace-macro" }
+    ],
+    "bindings": [
+      {
+        "agentId": "stock-picker",
+        "match": { "channel": "onebot", "accountId": "stock-picker" }
+      },
+      {
+        "agentId": "macro",
+        "match": { "channel": "onebot", "accountId": "macro" }
+      },
+      {
+        "agentId": "main",
+        "match": { "channel": "onebot", "accountId": "main" }
+      }
+    ]
+  }
+}
+```
+
+**配置说明**：
+
+| 配置项 | 说明 |
+|--------|------|
+| `accounts` | 账号配置对象，键为账号 ID（如 `main`、`stock-picker`） |
+| `accounts.<id>.type` | 连接类型：`forward-websocket` 或 `backward-websocket` |
+| `accounts.<id>.host` | 正向 WS 时，NapCat 的主机地址 |
+| `accounts.<id>.port` | 端口号 |
+| `accounts.<id>.accessToken` | 访问令牌 |
+| `bindings` | Agent 绑定规则，按 `accountId` 路由到不同 Agent |
+
+**混合模式**：不同账号可使用不同的连接类型，例如：
+- `main`：反向 WebSocket（NapCat 主动连接 OpenClaw）
+- `stock-picker`：正向 WebSocket（OpenClaw 主动连接 NapCat）
+
+**Agent 绑定方式**：
+
+| 绑定维度 | 示例 | 说明 |
+|----------|------|------|
+| 按账号 | `{ "accountId": "stock-picker" }` | 该账号所有消息都路由到指定 Agent |
+| 按群 | `{ "peer": { "kind": "group", "id": "12345" } }` | 该群消息路由到指定 Agent |
+| 混合 | 同时指定 `accountId` 和 `peer` | 精确匹配 |
+
+**向前兼容**：单账号的扁平配置格式仍然有效，自动作为 `default` 账号。
+
 ### 连接类型
 
 | 类型 | 说明 |
