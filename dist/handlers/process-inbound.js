@@ -20,6 +20,44 @@ const forwardPendingSessions = new Map();
 const lastSentChunkCountBySession = new Map();
 const FORWARD_PENDING_TTL_MS = 5 * 60 * 1000; // 5 分钟
 const FORWARD_CLEANUP_INTERVAL_MS = 60 * 1000; // 每分钟清理一次
+
+/**
+ * 计算机器人对话深度（通过消息引用链）
+ * 返回连续机器人回复的次数
+ */
+async function calculateConversationDepth(msg, botUserIds, accountId, maxDepth) {
+    let depth = 0;
+    let currentMsg = msg;
+    let visited = new Set();
+    
+    while (depth < maxDepth && currentMsg) {
+        const replyId = getReplyMessageId(currentMsg);
+        if (!replyId) break;
+        
+        // 防止循环引用
+        if (visited.has(replyId)) break;
+        visited.add(replyId);
+        
+        try {
+            const quoted = await getMsg(replyId, accountId);
+            if (!quoted) break;
+            
+            const senderId = Number(quoted.sender?.user_id);
+            if (botUserIds.has(senderId)) {
+                depth++;
+                currentMsg = quoted;
+            } else {
+                // 非机器人消息，停止计数
+                break;
+            }
+        } catch {
+            break;
+        }
+    }
+    
+    return depth;
+}
+
 function cleanupForwardPendingSessions() {
     const now = Date.now();
     const toDelete = [];
@@ -55,11 +93,18 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     if (msg.user_id != null && Number(msg.user_id) === Number(selfId)) {
         return;
     }
-    // 忽略其他机器人账号发送的消息（防止机器人之间无限对话）
+    // 检测机器人之间的对话深度，避免无限循环
     const botUserIds = globalThis.__onebotBotUserIds || new Set();
-    if (botUserIds.has(Number(msg.user_id))) {
-        api.logger?.info?.(`[onebot] ignoring message from another bot account: ${msg.user_id}`);
-        return;
+    const isFromBot = botUserIds.has(Number(msg.user_id));
+    const maxBotConversationDepth = config.maxBotConversationDepth ?? 3;
+    if (isFromBot && maxBotConversationDepth > 0) {
+        // 计算当前对话深度（通过引用链或消息历史）
+        const depth = await calculateConversationDepth(msg, botUserIds, effectiveAccountId, maxBotConversationDepth);
+        if (depth >= maxBotConversationDepth) {
+            api.logger?.info?.(`[onebot] stopping bot conversation at depth ${depth} (max: ${maxBotConversationDepth})`);
+            return;
+        }
+        api.logger?.info?.(`[onebot] bot conversation depth: ${depth}/${maxBotConversationDepth}`);
     }
     const replyId = getReplyMessageId(msg);
     let messageText;
