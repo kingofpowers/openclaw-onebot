@@ -12,9 +12,9 @@ import { loadPluginSdk, getSdk } from "../sdk.js";
 import { handleGroupIncrease } from "./group-increase.js";
 const DEFAULT_HISTORY_LIMIT = 20;
 export const sessionHistories = new Map();
-/** 追踪最近收到的消息内容，用于检测重复错误消息 */
-const recentMessages = new Map();
-const RECENT_MSG_TTL_MS = 60000; // 1 分钟
+/** 缓存每个会话中 AI 回复过的消息：{ senderId: { text: string, replyTime: number } } */
+const lastReplies = new Map();
+const LAST_REPLY_TTL_MS = 300000; // 5 分钟
 /** 追踪每个群最后一次机器人回复的消息 ID，用于获取历史消息时定位起点 */
 const lastBotReplyMsgId = new Map();
 /** forward 模式下待处理的会话，用于定期清理未完成的缓冲 */
@@ -95,27 +95,26 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     
     const isGroup = msg.message_type === "group";
     const groupId = msg.group_id;
-    
-    // 检查最近是否收到过相同的错误消息
-    const msgKey = `${effectiveAccountId}:${isGroup ? groupId : userId}`;
-    const recentMsgs = recentMessages.get(msgKey) || [];
     const now = Date.now();
     
-    // 清理过期记录
-    const validMsgs = recentMsgs.filter(m => now - m.time < RECENT_MSG_TTL_MS);
+    // 检查 AI 是否已经回复过此消息（避免重复回复）
+    const sessionKey = isGroup ? `${effectiveAccountId}:group:${groupId}` : `${effectiveAccountId}:user:${userId}`;
+    const replyCache = lastReplies.get(sessionKey) || {};
+    const userLastMsg = replyCache[userId];
     
-    // 如果是错误消息且最近收到过相同内容，跳过处理
+    if (userLastMsg && userLastMsg.text === messageText && (now - userLastMsg.replyTime) < LAST_REPLY_TTL_MS) {
+        api.logger?.info?.(`[onebot] skipping already-replied message from ${userId}: ${messageText.slice(0, 50)}...`);
+        return;
+    }
+    
+    // 如果是错误消息，检查是否重复
     if (isErrorLike) {
-        const duplicate = validMsgs.find(m => m.text === messageText);
-        if (duplicate) {
+        // 错误消息总是跳过重复
+        if (userLastMsg && userLastMsg.text === messageText) {
             api.logger?.info?.(`[onebot] ignoring duplicate error message: ${messageText.slice(0, 50)}...`);
             return;
         }
     }
-    
-    // 记录当前消息
-    validMsgs.push({ text: messageText, time: now });
-    recentMessages.set(msgKey, validMsgs.slice(-10)); // 只保留最近 10 条
     
     
     // 从文件读取最新配置（支持热加载）
@@ -678,6 +677,17 @@ export async function processInboundMessage(api, msg, accountId = "default") {
         catch (_) { }
     }
     finally {
+        // 记录此次回复（消息处理完成后缓存）
+        if (deliveredChunks.length > 0) {
+            const sessionKey = isGroup ? `${effectiveAccountId}:group:${groupId}` : `${effectiveAccountId}:user:${userId}`;
+            const replyCache = lastReplies.get(sessionKey) || {};
+            replyCache[userId] = {
+                text: messageText,
+                replyTime: Date.now(),
+            };
+            lastReplies.set(sessionKey, replyCache);
+        }
+        
         setForwardSuppressDelivery(false);
         setActiveReplySelfId(null);
         lastSentChunkCountBySession.delete(replySessionId);
