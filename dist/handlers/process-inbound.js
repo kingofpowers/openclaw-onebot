@@ -1,7 +1,7 @@
 /**
  * 入站消息处理
  */
-import { getOneBotConfig, getLiveConfig, getLiveOneBotChannelConfig, getRenderMarkdownToPlain, getCollapseDoubleNewlines, getWhitelistUserIds, isSkipMessage } from "../config.js";
+import { getOneBotConfig, getLiveConfig, getLiveOneBotChannelConfig, getRenderMarkdownToPlain, getCollapseDoubleNewlines, getWhitelistUserIds, isSkipMessage, hasDiscussionEndMarker } from "../config.js";
 import { getRawText, getTextFromSegments, getReplyMessageId, getTextFromMessageContent, isMentioned, } from "../message.js";
 import { markdownToPlain, collapseDoubleNewlines } from "../markdown.js";
 import { markdownToImage } from "../og-image.js";
@@ -85,6 +85,12 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     // 检查是否为排除消息（如 "An unknown error occurred"）
     if (isSkipMessage(messageText)) {
         api.logger?.info?.(`[onebot] skipping excluded message: ${messageText.slice(0, 50)}...`);
+        return;
+    }
+    
+    // 检查是否包含讨论终止标记（【共识达成】、【仅供参考】）
+    if (hasDiscussionEndMarker(messageText)) {
+        api.logger?.info?.(`[onebot] skipping discussion-end message: ${messageText.slice(0, 50)}...`);
         return;
     }
     
@@ -339,7 +345,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
                         const senderName = m.sender?.nickname ?? m.sender?.card ?? senderId;
                         return { senderId, senderName, text, timestamp: m.time };
                     })
-                    .filter((m) => m.text && !m.text.trim().startsWith('/') && !isSkipMessage(m.text));
+                    .filter((m) => m.text && !m.text.trim().startsWith('/') && !isSkipMessage(m.text) && !hasDiscussionEndMarker(m.text));
                 api.logger?.info?.(`[onebot] fetched ${historyContext.length} history messages for group ${groupId}`);
             }
         }

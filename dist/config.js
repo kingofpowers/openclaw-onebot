@@ -90,6 +90,12 @@ const DEFAULT_SKIP_MESSAGES = [
     "你好，我无法给到相关内容。",
 ];
 
+/** 讨论终止标记（AI用这些标记表示不想继续讨论） */
+const DISCUSSION_END_MARKERS = [
+    "【共识达成】",
+    "【仅供参考】",
+];
+
 /** 获取排除消息列表 */
 export function getSkipMessages(cfg) {
     const c = cfg ?? getLiveConfig();
@@ -100,6 +106,16 @@ export function getSkipMessages(cfg) {
     return DEFAULT_SKIP_MESSAGES;
 }
 
+/** 获取讨论终止标记列表 */
+export function getDiscussionEndMarkers(cfg) {
+    const c = cfg ?? getLiveConfig();
+    const v = c?.channels?.onebot?.discussionEndMarkers;
+    if (Array.isArray(v) && v.length > 0) {
+        return [...DISCUSSION_END_MARKERS, ...v];
+    }
+    return DISCUSSION_END_MARKERS;
+}
+
 /** 是否为排除消息（精确匹配或包含） */
 export function isSkipMessage(text, cfg) {
     if (!text?.trim()) return false;
@@ -108,6 +124,13 @@ export function isSkipMessage(text, cfg) {
     return skipMessages.some(msg => 
         trimmed === msg || trimmed.includes(msg)
     );
+}
+
+/** 是否包含讨论终止标记 */
+export function hasDiscussionEndMarker(text, cfg) {
+    if (!text?.trim()) return false;
+    const markers = getDiscussionEndMarkers(cfg);
+    return markers.some(marker => text.includes(marker));
 }
 
 /** 是否将机器人回复中的 Markdown 渲染为纯文本再发送，默认 true */
