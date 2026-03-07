@@ -1,7 +1,7 @@
 /**
  * OneBot WebSocket 服务（多账号支持）
  */
-import { getOneBotConfig, listAccountIds, invalidateConfigCache } from "./config.js";
+import { getOneBotConfig, listAccountIds, invalidateConfigCache, getDiscussionEndMarkers } from "./config.js";
 import { connectForward, createServerAndWait, addWs, removeWs, stopConnection, handleEchoResponse, startImageTempCleanup, stopImageTempCleanup, getWs } from "./connection.js";
 import { processInboundMessage } from "./handlers/process-inbound.js";
 import { handleGroupIncrease } from "./handlers/group-increase.js";
@@ -244,6 +244,14 @@ export function registerService(api) {
             
             const successCount = results.filter(Boolean).length;
             log.info?.(`[onebot] ${successCount}/${accountIds.length} connection(s) established`);
+            
+            // 检查讨论终止标记配置，提醒用户在 SOUL.md 中添加说明
+            const markers = getDiscussionEndMarkers();
+            if (markers.length > 0) {
+                log.warn?.(`[onebot] ⚠️ 讨论终止标记已配置: ${markers.join(", ")}`);
+                log.warn?.(`[onebot] ⚠️ 请确保在每个 agent 的 SOUL.md 中添加讨论控制说明，否则 AI 不知道如何使用这些标记！`);
+                log.warn?.(`[onebot] 参考 README 中的 "讨论/多 Agent 控制配置" 章节`);
+            }
             
             // 启动配置文件热加载监听
             startConfigWatcher(api).catch((e) => {
