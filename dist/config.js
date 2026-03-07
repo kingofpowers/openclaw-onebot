@@ -83,6 +83,33 @@ export function getOneBotConfig(api, accountId) {
     }
     return null;
 }
+
+/** 默认排除的消息内容（不触发 AI 回复，不进入历史记录） */
+const DEFAULT_SKIP_MESSAGES = [
+    "An unknown error occurred",
+    "你好，我无法给到相关内容。",
+];
+
+/** 获取排除消息列表 */
+export function getSkipMessages(cfg) {
+    const c = cfg ?? getLiveConfig();
+    const v = c?.channels?.onebot?.skipMessages;
+    if (Array.isArray(v) && v.length > 0) {
+        return [...DEFAULT_SKIP_MESSAGES, ...v];
+    }
+    return DEFAULT_SKIP_MESSAGES;
+}
+
+/** 是否为排除消息（精确匹配或包含） */
+export function isSkipMessage(text, cfg) {
+    if (!text?.trim()) return false;
+    const skipMessages = getSkipMessages(cfg);
+    const trimmed = text.trim();
+    return skipMessages.some(msg => 
+        trimmed === msg || trimmed.includes(msg)
+    );
+}
+
 /** 是否将机器人回复中的 Markdown 渲染为纯文本再发送，默认 true */
 export function getRenderMarkdownToPlain(cfg) {
     const c = cfg ?? getLiveConfig();

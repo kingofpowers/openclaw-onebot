@@ -1,9 +1,8 @@
 /**
  * 入站消息处理
  */
-import { getOneBotConfig, getLiveConfig, getLiveOneBotChannelConfig } from "../config.js";
+import { getOneBotConfig, getLiveConfig, getLiveOneBotChannelConfig, getRenderMarkdownToPlain, getCollapseDoubleNewlines, getWhitelistUserIds, isSkipMessage } from "../config.js";
 import { getRawText, getTextFromSegments, getReplyMessageId, getTextFromMessageContent, isMentioned, } from "../message.js";
-import { getRenderMarkdownToPlain, getCollapseDoubleNewlines, getWhitelistUserIds } from "../config.js";
 import { markdownToPlain, collapseDoubleNewlines } from "../markdown.js";
 import { markdownToImage } from "../og-image.js";
 import { sendPrivateMsg, sendGroupMsg, sendPrivateImage, sendGroupImage, sendGroupForwardMsg, sendPrivateForwardMsg, setMsgEmojiLike, getMsg, getGroupMsgHistory, } from "../connection.js";
@@ -80,6 +79,12 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     }
     if (!messageText?.trim()) {
         api.logger?.info?.(`[onebot] ignoring empty message`);
+        return;
+    }
+    
+    // 检查是否为排除消息（如 "An unknown error occurred"）
+    if (isSkipMessage(messageText)) {
+        api.logger?.info?.(`[onebot] skipping excluded message: ${messageText.slice(0, 50)}...`);
         return;
     }
     
@@ -334,7 +339,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
                         const senderName = m.sender?.nickname ?? m.sender?.card ?? senderId;
                         return { senderId, senderName, text, timestamp: m.time };
                     })
-                    .filter((m) => m.text && !m.text.trim().startsWith('/'));
+                    .filter((m) => m.text && !m.text.trim().startsWith('/') && !isSkipMessage(m.text));
                 api.logger?.info?.(`[onebot] fetched ${historyContext.length} history messages for group ${groupId}`);
             }
         }
