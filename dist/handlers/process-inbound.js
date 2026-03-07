@@ -87,6 +87,8 @@ export async function processInboundMessage(api, msg) {
     // 测试欢迎：@ 机器人并发送 /group-increase，模拟当前发送者入群，触发欢迎（使用该人的 id、nickname 等）
     // 使用 getTextFromSegments 提取纯文本，避免 raw_message 中 [CQ:at,qq=xxx] 等 CQ 码导致匹配失败
     const cmdText = getTextFromSegments(msg).trim() || messageText.trim();
+    // 纯命令检测：用于跳过 emoji、历史消息拉取等
+    const isPureCommand = /^\/[a-zA-Z0-9_-]+$/.test(cmdText);
     const groupIncreaseTrigger = isGroup && isMentioned(msg, selfId) && /^\/group-increase\s*$/i.test(cmdText) && gi?.enabled;
     if (groupIncreaseTrigger) {
         const fakeMsg = {
@@ -97,6 +99,12 @@ export async function processInboundMessage(api, msg) {
         };
         await handleGroupIncrease(api, fakeMsg);
         return;
+    }
+    // 当 cmdText 是纯 slash 命令时，用 cmdText 替换 messageText，避免 mention 导致的重复处理
+    // 例如：用户发送 "@机器人 /status"，cmdText = "/status"，messageText = "@机器人 /status"
+    // 这样 OpenClaw 核心会将此视为纯命令，不会触发 inline status + handleStatusCommand 双重响应
+    if (/^\/[a-zA-Z0-9_-]+$/.test(cmdText)) {
+        messageText = cmdText;
     }
     const userId = msg.user_id;
     const whitelist = getWhitelistUserIds(cfg);
@@ -218,12 +226,12 @@ export async function processInboundMessage(api, msg) {
         envelope: envelopeOptions,
     }) ?? { content: [{ type: "text", text: messageText }] };
     
-    // 群聊被 @ 时获取历史消息作为上下文
+    // 群聊被 @ 时获取历史消息作为上下文（纯命令不拉取历史）
     const onebotCfg = cfg?.channels?.onebot ?? {};
     const groupHistoryOnMention = onebotCfg.groupHistoryOnMention ?? false;
     const groupHistoryLimit = onebotCfg.groupHistoryLimit ?? 50;
     let historyContext = [];
-    if (isGroup && isMentioned(msg, selfId) && groupHistoryOnMention && groupId) {
+    if (isGroup && isMentioned(msg, selfId) && groupHistoryOnMention && groupId && !isPureCommand) {
         try {
             const history = await getGroupMsgHistory(Number(groupId), {
                 count: groupHistoryLimit,
@@ -294,6 +302,7 @@ export async function processInboundMessage(api, msg) {
     const ctxPayload = {
         Body: body,
         RawBody: finalRawBody,
+        CommandBody: messageText, // 原始用户消息，用于指令解析（不包含历史消息前缀）
         From: isGroup ? `onebot:group:${groupId}` : `onebot:${userId}`,
         To: replyTarget,
         SessionKey: effectiveSessionKey,
@@ -350,7 +359,8 @@ export async function processInboundMessage(api, msg) {
             emojiAdded = false;
         }
     };
-    if (userMessageId != null) {
+    // 纯命令（如 /status）不添加 thinking emoji
+    if (userMessageId != null && !isPureCommand) {
         try {
             await setMsgEmojiLike(userMessageId, thinkingEmojiId, true);
             emojiAdded = true;
