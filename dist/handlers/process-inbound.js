@@ -11,6 +11,7 @@ import { setActiveReplyTarget, clearActiveReplyTarget, setActiveReplySessionId, 
 import { loadPluginSdk, getSdk } from "../sdk.js";
 import { handleGroupIncrease } from "./group-increase.js";
 const DEFAULT_HISTORY_LIMIT = 20;
+const AI_REPLY_MARKER = "\u200B\u200B\uFEFF"; // 零宽空格 + 零宽空格 + BOM，用于避免 AI 互相循环回复
 export const sessionHistories = new Map();
 /** 追踪每个群最后一次机器人回复的消息 ID，用于获取历史消息时定位起点 */
 const lastBotReplyMsgId = new Map();
@@ -78,6 +79,13 @@ export async function processInboundMessage(api, msg, accountId = "default") {
         api.logger?.info?.(`[onebot] ignoring empty message`);
         return;
     }
+    
+    // 检测 AI 回复标记，避免循环回复
+    if (messageText.includes(AI_REPLY_MARKER)) {
+        api.logger?.info?.(`[onebot] ignoring AI reply (has marker)`);
+        return;
+    }
+    
     const isGroup = msg.message_type === "group";
     const groupId = msg.group_id;
     
@@ -135,7 +143,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     const whitelist = getWhitelistUserIds();
     const getConfig = () => getOneBotConfig(api, effectiveAccountId);
     if (whitelist.length > 0 && !whitelist.includes(Number(userId))) {
-        const denyMsg = "权限不足，请向管理员申请权限";
+        const denyMsg = "权限不足，请向管理员申请权限" + AI_REPLY_MARKER;
         try {
             if (msg.message_type === "group" && msg.group_id)
                 await sendGroupMsg(msg.group_id, denyMsg, getConfig, effectiveAccountId);
@@ -433,15 +441,17 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     const doSendChunk = async (effectiveIsGroup, effectiveGroupId, uid, text, mediaUrl) => {
         let lastMsgId = undefined;
         if (text) {
+            // 在消息末尾添加 AI 标记（不可见）
+            const textWithMarker = text + AI_REPLY_MARKER;
             if (effectiveIsGroup && effectiveGroupId) {
-                lastMsgId = await sendGroupMsg(effectiveGroupId, text, getConfig, effectiveAccountId);
+                lastMsgId = await sendGroupMsg(effectiveGroupId, textWithMarker, getConfig, effectiveAccountId);
                 // 记录机器人最后发送的消息 ID，用于下次获取历史消息时定位起点
                 if (lastMsgId != null) {
                     lastBotReplyMsgId.set(effectiveGroupId, lastMsgId);
                 }
             }
             else if (uid)
-                lastMsgId = await sendPrivateMsg(uid, text, getConfig, effectiveAccountId);
+                lastMsgId = await sendPrivateMsg(uid, textWithMarker, getConfig, effectiveAccountId);
         }
         if (mediaUrl) {
             if (effectiveIsGroup && effectiveGroupId) {
@@ -558,7 +568,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
                                                     nodes.push({ type: "node", data: { id: String(mid) } });
                                             }
                                             else if (c.text) {
-                                                const mid = await sendPrivateMsg(selfId, c.text, getConfig, effectiveAccountId);
+                                                const mid = await sendPrivateMsg(selfId, c.text + AI_REPLY_MARKER, getConfig, effectiveAccountId);
                                                 if (mid)
                                                     nodes.push({ type: "node", data: { id: String(mid) } });
                                             }
@@ -634,9 +644,9 @@ export async function processInboundMessage(api, msg, accountId = "default") {
         try {
             const { userId: uid, groupId: gid, isGroup: ig } = ctxPayload._onebot || {};
             if (ig && gid)
-                await sendGroupMsg(gid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}`, getConfig, effectiveAccountId);
+                await sendGroupMsg(gid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}${AI_REPLY_MARKER}`, getConfig, effectiveAccountId);
             else if (uid)
-                await sendPrivateMsg(uid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}`, getConfig, effectiveAccountId);
+                await sendPrivateMsg(uid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}${AI_REPLY_MARKER}`, getConfig, effectiveAccountId);
         }
         catch (_) { }
     }
