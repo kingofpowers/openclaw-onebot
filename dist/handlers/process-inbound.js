@@ -11,8 +11,10 @@ import { setActiveReplyTarget, clearActiveReplyTarget, setActiveReplySessionId, 
 import { loadPluginSdk, getSdk } from "../sdk.js";
 import { handleGroupIncrease } from "./group-increase.js";
 const DEFAULT_HISTORY_LIMIT = 20;
-const AI_REPLY_MARKER = "\u200B\u200B\uFEFF"; // 零宽空格 + 零宽空格 + BOM，用于避免 AI 互相循环回复
 export const sessionHistories = new Map();
+/** 追踪最近收到的消息内容，用于检测重复错误消息 */
+const recentMessages = new Map();
+const RECENT_MSG_TTL_MS = 60000; // 1 分钟
 /** 追踪每个群最后一次机器人回复的消息 ID，用于获取历史消息时定位起点 */
 const lastBotReplyMsgId = new Map();
 /** forward 模式下待处理的会话，用于定期清理未完成的缓冲 */
@@ -80,14 +82,41 @@ export async function processInboundMessage(api, msg, accountId = "default") {
         return;
     }
     
-    // 检测 AI 回复标记，避免循环回复
-    if (messageText.includes(AI_REPLY_MARKER)) {
-        api.logger?.info?.(`[onebot] ignoring AI reply (has marker)`);
-        return;
-    }
+    // 检测重复错误消息，避免 AI 循环回复
+    const errorPatterns = [
+        /an unknown error occurred/i,
+        /处理失败/i,
+        /无法给到相关内容/i,
+        /我无法/i,
+        /error/i,
+        /错误/i,
+    ];
+    const isErrorLike = errorPatterns.some(p => p.test(messageText));
     
     const isGroup = msg.message_type === "group";
     const groupId = msg.group_id;
+    
+    // 检查最近是否收到过相同的错误消息
+    const msgKey = `${effectiveAccountId}:${isGroup ? groupId : userId}`;
+    const recentMsgs = recentMessages.get(msgKey) || [];
+    const now = Date.now();
+    
+    // 清理过期记录
+    const validMsgs = recentMsgs.filter(m => now - m.time < RECENT_MSG_TTL_MS);
+    
+    // 如果是错误消息且最近收到过相同内容，跳过处理
+    if (isErrorLike) {
+        const duplicate = validMsgs.find(m => m.text === messageText);
+        if (duplicate) {
+            api.logger?.info?.(`[onebot] ignoring duplicate error message: ${messageText.slice(0, 50)}...`);
+            return;
+        }
+    }
+    
+    // 记录当前消息
+    validMsgs.push({ text: messageText, time: now });
+    recentMessages.set(msgKey, validMsgs.slice(-10)); // 只保留最近 10 条
+    
     
     // 从文件读取最新配置（支持热加载）
     const cfg = getLiveConfig() ?? api.config;
@@ -143,7 +172,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     const whitelist = getWhitelistUserIds();
     const getConfig = () => getOneBotConfig(api, effectiveAccountId);
     if (whitelist.length > 0 && !whitelist.includes(Number(userId))) {
-        const denyMsg = "权限不足，请向管理员申请权限" + AI_REPLY_MARKER;
+        const denyMsg = "权限不足，请向管理员申请权限";
         try {
             if (msg.message_type === "group" && msg.group_id)
                 await sendGroupMsg(msg.group_id, denyMsg, getConfig, effectiveAccountId);
@@ -441,17 +470,15 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     const doSendChunk = async (effectiveIsGroup, effectiveGroupId, uid, text, mediaUrl) => {
         let lastMsgId = undefined;
         if (text) {
-            // 在消息末尾添加 AI 标记（不可见）
-            const textWithMarker = text + AI_REPLY_MARKER;
             if (effectiveIsGroup && effectiveGroupId) {
-                lastMsgId = await sendGroupMsg(effectiveGroupId, textWithMarker, getConfig, effectiveAccountId);
+                lastMsgId = await sendGroupMsg(effectiveGroupId, text, getConfig, effectiveAccountId);
                 // 记录机器人最后发送的消息 ID，用于下次获取历史消息时定位起点
                 if (lastMsgId != null) {
                     lastBotReplyMsgId.set(effectiveGroupId, lastMsgId);
                 }
             }
             else if (uid)
-                lastMsgId = await sendPrivateMsg(uid, textWithMarker, getConfig, effectiveAccountId);
+                lastMsgId = await sendPrivateMsg(uid, text, getConfig, effectiveAccountId);
         }
         if (mediaUrl) {
             if (effectiveIsGroup && effectiveGroupId) {
@@ -568,7 +595,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
                                                     nodes.push({ type: "node", data: { id: String(mid) } });
                                             }
                                             else if (c.text) {
-                                                const mid = await sendPrivateMsg(selfId, c.text + AI_REPLY_MARKER, getConfig, effectiveAccountId);
+                                                const mid = await sendPrivateMsg(selfId, c.text, getConfig, effectiveAccountId);
                                                 if (mid)
                                                     nodes.push({ type: "node", data: { id: String(mid) } });
                                             }
@@ -644,9 +671,9 @@ export async function processInboundMessage(api, msg, accountId = "default") {
         try {
             const { userId: uid, groupId: gid, isGroup: ig } = ctxPayload._onebot || {};
             if (ig && gid)
-                await sendGroupMsg(gid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}${AI_REPLY_MARKER}`, getConfig, effectiveAccountId);
+                await sendGroupMsg(gid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}`, getConfig, effectiveAccountId);
             else if (uid)
-                await sendPrivateMsg(uid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}${AI_REPLY_MARKER}`, getConfig, effectiveAccountId);
+                await sendPrivateMsg(uid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}`, getConfig, effectiveAccountId);
         }
         catch (_) { }
     }
