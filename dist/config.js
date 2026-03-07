@@ -10,7 +10,6 @@ let cachedConfig = null;
  * 清除配置缓存（在检测到文件变化时调用）
  */
 export function invalidateConfigCache() {
-    console.log(`[onebot] invalidateConfigCache: clearing cache`);
     cachedConfig = null;
 }
 
@@ -33,16 +32,13 @@ export function getLiveConfig() {
             if (existsSync(path)) {
                 const content = readFileSync(path, "utf-8");
                 cachedConfig = JSON.parse(content);
-                console.log(`[onebot] getLiveConfig: loaded from ${path}`);
                 return cachedConfig;
             }
-        } catch (e) {
-            console.log(`[onebot] getLiveConfig: failed to read ${path}: ${e.message}`);
+        } catch {
             continue;
         }
     }
     
-    console.log(`[onebot] getLiveConfig: no config file found`);
     return null;
 }
 
