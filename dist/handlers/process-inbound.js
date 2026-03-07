@@ -51,7 +51,14 @@ export async function processInboundMessage(api, msg, accountId = "default") {
         return;
     }
     const selfId = msg.self_id ?? 0;
+    // 忽略自己发送的消息
     if (msg.user_id != null && Number(msg.user_id) === Number(selfId)) {
+        return;
+    }
+    // 忽略其他机器人账号发送的消息（防止机器人之间无限对话）
+    const botUserIds = globalThis.__onebotBotUserIds || new Set();
+    if (botUserIds.has(Number(msg.user_id))) {
+        api.logger?.info?.(`[onebot] ignoring message from another bot account: ${msg.user_id}`);
         return;
     }
     const replyId = getReplyMessageId(msg);
