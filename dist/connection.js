@@ -224,16 +224,27 @@ export async function waitForConnection(accountId = "default", timeoutMs = 30000
  */
 export async function ensureConnection(getConfig, accountId = "default", timeoutMs = 30000) {
     const log = getLogger();
+    log.info?.(`[onebot] ensureConnection: requested accountId=${accountId}`);
+    
     const ws = wsMap.get(accountId);
     if (ws && ws.readyState === WebSocket.OPEN) {
         log.info?.(`[onebot] ensureConnection: found existing connection for accountId=${accountId}`);
         return ws;
     }
+    
     const config = getConfig();
-    if (!config)
-        throw new Error("OneBot not configured");
+    if (!config) {
+        log.error?.(`[onebot] ensureConnection: no config for accountId=${accountId}`);
+        throw new Error(`OneBot not configured for accountId=${accountId}`);
+    }
+    
     log.info?.(`[onebot] ensureConnection: accountId=${accountId}, config.accountId=${config.accountId}, config.type=${config.type}`);
+    
     if (config.type === "forward-websocket") {
+        // 确保配置的 accountId 与请求的一致
+        if (config.accountId !== accountId) {
+            log.error?.(`[onebot] ensureConnection: config.accountId mismatch! requested=${accountId}, config=${config.accountId}`);
+        }
         log.info?.(`[onebot] 连接 OneBot (forward-websocket, accountId=${accountId})...`);
         const socket = await connectForward(config);
         setupEchoHandler(socket);

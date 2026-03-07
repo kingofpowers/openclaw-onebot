@@ -49,6 +49,10 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     }
     const config = getOneBotConfig(api, accountId);
     const effectiveAccountId = config?.accountId ?? accountId ?? "default";
+    
+    // 调试：追踪 accountId
+    api.logger?.info?.(`[onebot] processInboundMessage: accountId=${accountId}, config?.accountId=${config?.accountId}, effectiveAccountId=${effectiveAccountId}`);
+    
     if (!config) {
         api.logger?.warn?.("[onebot] not configured");
         return;
