@@ -98,13 +98,14 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     const userId = String(msg.user_id ?? 0);
     const now = Date.now();
     
-    // 检查 AI 是否已经回复过此消息（避免重复回复）
-    const sessionKey = isGroup ? `${effectiveAccountId}:group:${groupId}` : `${effectiveAccountId}:user:${userId}`;
-    const replyCache = lastReplies.get(sessionKey) || {};
+    // 跨账号去重：同一个群的消息，不管哪个账号收到，都应该共享同一个去重缓存
+    // 这样可以避免多个账号同时响应同一条消息
+    const dedupeKey = isGroup ? `group:${groupId}` : `${effectiveAccountId}:user:${userId}`;
+    const replyCache = lastReplies.get(dedupeKey) || {};
     const userLastMsg = replyCache[userId];
     
     if (userLastMsg && userLastMsg.text === messageText && (now - userLastMsg.replyTime) < LAST_REPLY_TTL_MS) {
-        api.logger?.info?.(`[onebot] skipping already-replied message from ${userId}: ${messageText.slice(0, 50)}...`);
+        api.logger?.info?.(`[onebot] skipping already-replied message from ${userId} in ${dedupeKey}: ${messageText.slice(0, 50)}...`);
         return;
     }
     
@@ -678,14 +679,15 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     }
     finally {
         // 记录此次回复（消息处理完成后缓存）
+        // 跨账号去重：使用与检测时相同的 key
         if (deliveredChunks.length > 0) {
-            const sessionKey = isGroup ? `${effectiveAccountId}:group:${groupId}` : `${effectiveAccountId}:user:${userId}`;
-            const replyCache = lastReplies.get(sessionKey) || {};
+            const dedupeKey = isGroup ? `group:${groupId}` : `${effectiveAccountId}:user:${userId}`;
+            const replyCache = lastReplies.get(dedupeKey) || {};
             replyCache[userId] = {
                 text: messageText,
                 replyTime: Date.now(),
             };
-            lastReplies.set(sessionKey, replyCache);
+            lastReplies.set(dedupeKey, replyCache);
         }
         
         setForwardSuppressDelivery(false);
