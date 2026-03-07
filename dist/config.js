@@ -93,7 +93,7 @@ const DEFAULT_SKIP_MESSAGES = [
 /** 讨论终止标记（AI用这些标记表示不想继续讨论） */
 const DISCUSSION_END_MARKERS = [
     "【共识达成】",
-    "【仅供参考】",
+    "ℹ️",
 ];
 
 /** 获取排除消息列表 */
