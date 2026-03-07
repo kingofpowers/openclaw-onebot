@@ -87,6 +87,87 @@ docker network connect openclaw-net openclaw-gateway
 docker network connect openclaw-net napcat
 ```
 
+#### 多 NapCat 容器部署示例
+
+多个 QQ 账号需要多个 NapCat 容器，以下是 `docker-compose.yml` 示例：
+
+```yaml
+version: "3"
+services:
+  napcat:
+    environment:
+      - NAPCAT_UID=1000
+      - NAPCAT_GID=1000
+    ports:
+      - 3000:3000      # WebUI
+      - 3001:3001      # WebSocket 服务器（正向 WS）
+      - 6099:6099      # 文件管理
+    container_name: napcat
+    restart: always
+    image: mlikiowa/napcat-docker:latest
+    volumes:
+      - ./napcat-plugin-openclaw:/app/napcat/plugins/napcat-plugin-openclaw
+      - ./cache:/app/napcat/cache
+    networks:
+      - openclaw-network
+
+  napcat2:
+    environment:
+      - NAPCAT_UID=1000
+      - NAPCAT_GID=1000
+    ports:
+      - 3100:3000      # WebUI
+      - 3101:3001      # WebSocket 服务器（正向 WS）
+      - 6199:6099      # 文件管理
+    container_name: napcat2
+    restart: always
+    image: mlikiowa/napcat-docker:latest
+    volumes:
+      - ./napcat-plugin-openclaw:/app/napcat/plugins/napcat-plugin-openclaw
+      - ./cache2:/app/napcat/cache
+    networks:
+      - openclaw-network
+
+networks:
+  openclaw-network:
+    driver: bridge
+    name: openclaw-network
+```
+
+**配置说明**：
+
+1. 分别访问 WebUI 配置 WebSocket：
+   - napcat: http://127.0.0.1:6099/webui
+   - napcat2: http://127.0.0.1:6199/webui
+
+2. 在 WebUI → 网络配置中添加 **WebSocket 服务器**：
+   - napcat: 监听端口 `3001`
+   - napcat2: 监听端口 `3001`（容器内）
+
+3. OpenClaw 配置：
+```json
+{
+  "channels": {
+    "onebot": {
+      "accounts": {
+        "main": {
+          "type": "forward-websocket",
+          "host": "napcat",
+          "port": 3001
+        },
+        "macro": {
+          "type": "forward-websocket",
+          "host": "napcat2",
+          "port": 3001
+        }
+      }
+    }
+  }
+}
+```
+
+**注意**：多个 NapCat 容器需要使用不同的 `cache` 目录，否则会产生冲突。
+
 
 ## 配置
 
