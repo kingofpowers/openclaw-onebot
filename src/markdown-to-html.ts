@@ -3,8 +3,18 @@
  * 用于 OG 图片模式下的 Markdown 渲染
  */
 
+import { readFileSync, existsSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { marked } from "marked";
 import hljs from "highlight.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** 内置 dust 主题 CSS 文件路径（相对当前模块，包根目录下的 themes/dust.css） */
+function getDustThemePath(): string {
+  return join(__dirname, "..", "themes", "dust.css");
+}
 
 const HIGHLIGHT_CSS = `
 .hljs{display:block;overflow-x:auto;padding:1em;background:#1e1e1e;color:#d4d4d4;border-radius:6px;font-family:Consolas,Monaco,monospace;font-size:13px;line-height:1.5}
@@ -75,6 +85,31 @@ export function markdownToHtml(md: string): string {
   return marked.parse(md, { async: false }) as string;
 }
 
-export function getMarkdownStyles(): string {
-  return WRAPPER_STYLE;
+/**
+ * 获取用于 OG 图片的完整样式（基础 + 主题）
+ * @param theme "default" 无额外样式；"dust" 内置 dust 主题；或 custom 时的 CSS 文件绝对路径
+ */
+export function getMarkdownStyles(theme?: string): string {
+  let extra = "";
+  const t = (theme || "default").trim();
+  if (t === "dust") {
+    const dustPath = getDustThemePath();
+    try {
+      if (existsSync(dustPath)) {
+        const dustCss = readFileSync(dustPath, "utf-8");
+        extra = `<style>body{background:var(--background) !important;padding:24px;max-width:800px;}${dustCss}</style>`;
+      }
+    } catch {
+      /* ignore */
+    }
+  } else if (t !== "default" && t !== "none" && (t.includes("/") || t.includes("\\"))) {
+    try {
+      if (existsSync(t)) {
+        extra = `<style>${readFileSync(t, "utf-8")}</style>`;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return WRAPPER_STYLE + extra;
 }

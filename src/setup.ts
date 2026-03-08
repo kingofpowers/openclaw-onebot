@@ -79,6 +79,32 @@ export async function runOneBotSetup(): Promise<void> {
     })
   );
 
+  let ogImageRenderTheme: "default" | "dust" | "custom" = "default";
+  let ogImageRenderThemePath: string | undefined;
+  if (longMessageMode === "og_image") {
+    const themeChoice = guardCancel(
+      await clackSelect({
+        message: "长消息生成图片时的渲染样式：",
+        options: [
+          { value: "default", label: "default（无额外样式，默认白底黑字）" },
+          { value: "dust", label: "dust（内置暖色旧纸质感）" },
+          { value: "custom", label: "custom（自定义 CSS 文件路径）" },
+        ],
+        initialValue: "default",
+      })
+    );
+    ogImageRenderTheme = themeChoice as "default" | "dust" | "custom";
+    if (themeChoice === "custom") {
+      const customPath = guardCancel(
+        await clackText({
+          message: "CSS 文件绝对路径",
+          initialValue: "",
+        })
+      );
+      ogImageRenderThemePath = (customPath || "").trim() || undefined;
+    }
+  }
+
   const longMessageThreshold = guardCancel(
     await clackText({
       message: "长消息阈值（字符数，超过则启用上述模式）",
@@ -123,6 +149,7 @@ export async function runOneBotSetup(): Promise<void> {
     requireMention: true,
     renderMarkdownToPlain,
     longMessageMode,
+    ...(longMessageMode === "og_image" ? { ogImageRenderTheme, ...(ogImageRenderThemePath != null ? { ogImageRenderThemePath } : {}) } : {}),
     longMessageThreshold: Number.isFinite(thresholdNum) ? thresholdNum : 300,
     ...(whitelistIds.length > 0 ? { whitelistUserIds: whitelistIds } : {}),
   };

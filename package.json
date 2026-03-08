@@ -26,6 +26,7 @@
   "exports": "./dist/index.js",
   "files": [
     "dist",
+    "themes",
     "skills",
     "openclaw.plugin.json",
     "README.md"
@@ -48,10 +49,12 @@
     "test:connect": "npx tsx scripts/test-connect.ts",
     "test:group-welcome": "npx tsx scripts/test-group-welcome.ts",
     "test:group-increase-handler": "npx tsx scripts/test-group-increase-handler.ts",
+    "test:render-og-image": "npx tsx test/render-og-image.ts",
     "prepublishOnly": "npm run build",
     "pub": "npm run build && npm publish"
   },
   "dependencies": {
+    "fuse.js": "^7.1.0",
     "ws": "^8.17.0",
     "@clack/prompts": "^1.0.0",
     "tsx": "^4.0.0",

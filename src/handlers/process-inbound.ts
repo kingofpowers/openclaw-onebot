@@ -11,7 +11,7 @@ import {
     getTextFromMessageContent,
     isMentioned,
 } from "../message.js";
-import { getRenderMarkdownToPlain, getCollapseDoubleNewlines, getWhitelistUserIds } from "../config.js";
+import { getRenderMarkdownToPlain, getCollapseDoubleNewlines, getWhitelistUserIds, getOgImageRenderTheme } from "../config.js";
 import { markdownToPlain, collapseDoubleNewlines } from "../markdown.js";
 import { markdownToImage } from "../og-image.js";
 import {
@@ -364,7 +364,7 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
                                     if (fullRaw.trim()) {
                                         if (longMessageMode === "og_image") {
                                             try {
-                                                const imgUrl = await markdownToImage(fullRaw);
+                                                const imgUrl = await markdownToImage(fullRaw, { theme: getOgImageRenderTheme(api?.config) });
                                                 if (imgUrl) {
                                                     if (effectiveIsGroup && effectiveGroupId) await sendGroupImage(effectiveGroupId, imgUrl, api.logger, getConfig);
                                                     else if (uid) await sendPrivateImage(uid, imgUrl, api.logger, getConfig);
@@ -422,7 +422,7 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
                                     const fullRaw = deliveredChunks.map((c) => c.rawText ?? c.text ?? "").join("\n\n");
                                     if (fullRaw.trim()) {
                                         try {
-                                            const imgUrl = await markdownToImage(fullRaw);
+                                            const imgUrl = await markdownToImage(fullRaw, { theme: getOgImageRenderTheme(api?.config) });
                                             if (imgUrl) {
                                                 if (effectiveIsGroup && effectiveGroupId) await sendGroupImage(effectiveGroupId, imgUrl, api.logger, getConfig);
                                                 else if (uid) await sendPrivateImage(uid, imgUrl, api.logger, getConfig);

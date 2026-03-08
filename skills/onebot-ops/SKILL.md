@@ -46,16 +46,27 @@ openclaw plugins install ./openclaw-onebot
 | **图片消息** | message 为 `[{ type: "image", data: { file } }]` |
 | **delete_msg** | 撤回消息 |
 | **get_msg** | 获取单条消息 |
-| **get_group_msg_history** | 获取群历史（Lagrange.Core 扩展） |
+| **get_group_msg_history** | 获取群历史（Lagrange.Core 扩展），支持 reverse_order 分页 |
 | **upload_group_file** | 上传群文件 |
 | **upload_private_file** | 上传私聊文件 |
 | **set_msg_emoji_like** | 表情回应（Lagrange/QQ NT 扩展） |
 
-## 常用命令
+## Agent 工具与 CLI
+
+插件提供群历史、按名字搜 QQ 等能力，既注册为 **Agent 工具**（供 Cron/脚本/AI 调用），也提供等价的 **CLI 命令**，便于 AI 与人工按文档调用。
+
+**详细说明与所有命令用法见：[agent-tools.md](agent-tools.md)**
+
+### 常用 CLI 一览
 
 | 命令 | 说明 |
 |------|------|
 | `openclaw onebot setup` | 交互式配置 OneBot 连接 |
-| `openclaw message send --channel onebot --target group:xxx --message "hi"` | 发送群消息 |
+| `openclaw onebot get-group-msg-history --group-id <群号> [--hours N]` | 获取群历史（单页或最近 N 小时内，从旧到新） |
+| `openclaw onebot search-group-member --group-id <群号> --name <名字>` | 按名字模糊搜群友 QQ 号 |
+| `openclaw onebot upload-file --target group:<群号> --file <路径> --name <文件名>` | 上传文件到群/私聊 |
+| `openclaw message send --channel onebot --target group:xxx --message "hi"` | 发送文本/图片 |
 | `openclaw gateway status` | 查看 Gateway 状态 |
 | `openclaw logs --follow` | 查看日志 |
+
+AI 或脚本需要「获取群历史、查群友 QQ」时，应使用上述 CLI 或查阅 [agent-tools.md](agent-tools.md) 中的完整参数说明。

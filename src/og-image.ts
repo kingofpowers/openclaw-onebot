@@ -10,7 +10,7 @@ import { markdownToHtml, getMarkdownStyles } from "./markdown-to-html.js";
 
 const OG_TEMP_DIR = join(tmpdir(), "openclaw-onebot-og");
 
-export async function markdownToImage(md: string): Promise<string | null> {
+export async function markdownToImage(md: string, opts?: { theme?: string }): Promise<string | null> {
   if (!md?.trim()) return null;
   let nodeHtmlToImage: (opts: { output: string; html: string; type?: string; quality?: number; puppeteerArgs?: object }) => Promise<unknown>;
   try {
@@ -22,8 +22,10 @@ export async function markdownToImage(md: string): Promise<string | null> {
   if (!nodeHtmlToImage) return null;
 
   const bodyHtml = markdownToHtml(md);
-  const styles = getMarkdownStyles();
-  const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">${styles}</head><body>${bodyHtml}</body></html>`;
+  const styles = getMarkdownStyles(opts?.theme);
+  const theme = (opts?.theme || "").trim();
+  const wrappedBody = theme === "dust" ? `<div class="markdown">${bodyHtml}</div>` : bodyHtml;
+  const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">${styles}</head><body>${wrappedBody}</body></html>`;
 
   mkdirSync(OG_TEMP_DIR, { recursive: true });
   const outPath = join(OG_TEMP_DIR, `og-${Date.now()}-${Math.random().toString(36).slice(2)}.png`);

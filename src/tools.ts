@@ -14,9 +14,11 @@ import {
   uploadGroupFile,
   uploadPrivateFile,
   getGroupMsgHistory,
+  getGroupMsgHistoryInRange,
   getGroupInfo,
   getStrangerInfo,
   getGroupMemberInfo,
+  searchGroupMemberByName,
   getAvatarUrl,
 } from "./connection.js";
 import { getRenderMarkdownToPlain } from "./config.js";
@@ -28,9 +30,11 @@ export interface OneBotClient {
   sendPrivateMsg: typeof sendPrivateMsg;
   sendPrivateImage: typeof sendPrivateImage;
   getGroupMsgHistory: typeof getGroupMsgHistory;
+  getGroupMsgHistoryInRange: typeof getGroupMsgHistoryInRange;
   getGroupInfo: typeof getGroupInfo;
   getStrangerInfo: typeof getStrangerInfo;
   getGroupMemberInfo: typeof getGroupMemberInfo;
+  searchGroupMemberByName: typeof searchGroupMemberByName;
   getAvatarUrl: typeof getAvatarUrl;
 }
 
@@ -40,9 +44,11 @@ export const onebotClient: OneBotClient = {
   sendPrivateMsg,
   sendPrivateImage,
   getGroupMsgHistory,
+  getGroupMsgHistoryInRange,
   getGroupInfo,
   getStrangerInfo,
   getGroupMemberInfo,
+  searchGroupMemberByName,
   getAvatarUrl,
 };
 
@@ -145,27 +151,55 @@ export function registerTools(api: any): void {
 
   api.registerTool({
     name: "onebot_get_group_msg_history",
-    description: "获取群聊历史消息（需 Lagrange.Core，go-cqhttp 可能不支持）。用于定时总结、日报等场景",
+    description: "获取群聊历史消息。可指定 hours 获取最近 N 小时内消息（分页拉取），不指定则返回单页（始终从旧到新）。需 Lagrange.Core",
     parameters: {
       type: "object",
       properties: {
         group_id: { type: "number", description: "群号" },
-        count: { type: "number", description: "获取条数，默认 50" },
-        message_seq: { type: "number", description: "可选，起始消息序号" },
-        message_id: { type: "number", description: "可选，起始消息 ID" },
+        hours: { type: "number", description: "可选。指定则获取从现在到过去 N 小时内的消息（如 24 即过去 24 小时）" },
+        count: { type: "number", description: "单页条数（未指定 hours 时生效），默认 50" },
+        message_seq: { type: "number", description: "可选，起始消息序号（分页用，未指定 hours 时生效）" },
+        message_id: { type: "number", description: "可选，起始消息 ID（未指定 hours 时生效）" },
+        limit: { type: "number", description: "指定 hours 时最多返回条数，默认 3000" },
       },
       required: ["group_id"],
     },
-    async execute(_id: string, params: { group_id: number; count?: number; message_seq?: number; message_id?: number }) {
+    async execute(
+      _id: string,
+      params: {
+        group_id: number;
+        hours?: number;
+        count?: number;
+        message_seq?: number;
+        message_id?: number;
+        limit?: number;
+      }
+    ) {
       const w = getWs();
       if (!w || w.readyState !== WebSocket.OPEN) {
         return { content: [{ type: "text", text: "OneBot 未连接" }] };
       }
       try {
+        const hoursNum = params.hours != null ? Number(params.hours) : undefined;
+        if (typeof hoursNum === "number" && Number.isFinite(hoursNum) && hoursNum > 0) {
+          const startTime = Math.floor(Date.now() / 1000) - hoursNum * 3600;
+          const msgs = await getGroupMsgHistoryInRange(params.group_id, {
+            startTime,
+            limit: params.limit ?? 3000,
+            chunkSize: 100,
+          });
+          const summary = msgs.map((m) => {
+            const text = typeof m.message === "string" ? m.message : JSON.stringify(m.message);
+            const nick = m.sender?.nickname ?? m.sender?.user_id ?? "?";
+            return `[${new Date(m.time * 1000).toISOString()}] ${nick}: ${text.slice(0, 200)}`;
+          });
+          return { content: [{ type: "text", text: summary.join("\n") || "无历史消息", metadata: { count: msgs.length } }] };
+        }
         const msgs = await getGroupMsgHistory(params.group_id, {
           count: params.count ?? 50,
           message_seq: params.message_seq,
           message_id: params.message_id,
+          reverse_order: true,
         });
         const summary = msgs.map((m) => {
           const text = typeof m.message === "string" ? m.message : JSON.stringify(m.message);
@@ -175,6 +209,35 @@ export function registerTools(api: any): void {
         return { content: [{ type: "text", text: summary.join("\n") || "无历史消息" }] };
       } catch (e: any) {
         return { content: [{ type: "text", text: `获取失败: ${e?.message}` }] };
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "onebot_search_group_member",
+    description: "按名字模糊匹配群成员，返回匹配到的 QQ 号与展示名（群名片优先）。用于根据昵称/群名片查 QQ 号",
+    parameters: {
+      type: "object",
+      properties: {
+        group_id: { type: "number", description: "群号" },
+        name: { type: "string", description: "要搜索的名字（群名片或昵称，支持模糊匹配）" },
+      },
+      required: ["group_id", "name"],
+    },
+    async execute(_id: string, params: { group_id: number; name: string }) {
+      const w = getWs();
+      if (!w || w.readyState !== WebSocket.OPEN) {
+        return { content: [{ type: "text", text: "OneBot 未连接" }] };
+      }
+      try {
+        const list = await searchGroupMemberByName(params.group_id, params.name);
+        if (!list.length) {
+          return { content: [{ type: "text", text: `未找到匹配「${params.name}」的群成员` }] };
+        }
+        const lines = list.map((m) => `QQ: ${m.user_id}  展示名: ${m.displayName}`);
+        return { content: [{ type: "text", text: lines.join("\n"), metadata: { count: list.length, matches: list } }] };
+      } catch (e: any) {
+        return { content: [{ type: "text", text: `搜索失败: ${e?.message}` }] };
       }
     },
   });

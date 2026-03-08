@@ -26,6 +26,7 @@
 - ✅ 自动获取上下文
 - ✅ 新成员入群欢迎
 - ✅ 自动合并转发长消息
+- ✅ **长消息生成图片**：超过阈值可将 Markdown 渲染为图片发送（可选主题：default / dust / custom 自定义 CSS）
 - ✅ 支持文件，图像读取/上传
 - ✅ 支持白名单系统
 - ✅ 通过 `openclaw message send` CLI 发送（无 Agent 工具，降低 token 消耗）
@@ -65,6 +66,57 @@ openclaw onebot setup
 1. 安装并配置
 2. 重启 Gateway：`openclaw gateway restart`
 3. 在 QQ 私聊或群聊中发消息（群聊需 @ 机器人）
+
+## 长消息处理与 OG 图片渲染
+
+当单次回复超过**长消息阈值**（默认 300 字）时，可选用三种模式（`openclaw onebot setup` 中配置）：
+
+| 模式 | 说明 |
+|------|------|
+| `normal` | 正常分段发送 |
+| `og_image` | 将 Markdown 转为 HTML 再生成图片发送（需安装 `node-html-to-image`） |
+| `forward` | 合并转发（发给自己后打包转发） |
+
+选择 **生成图片发送（og_image）** 时，会额外询问**渲染主题**：
+
+| 选项 | 说明 |
+|------|------|
+| **default** | 无额外样式，默认白底黑字 |
+| **dust** | 内置主题：暖色、旧纸质感 |
+| **custom** | 自定义：在 `ogImageRenderThemePath` 中填写 CSS 文件绝对路径 |
+
+配置项（枚举 + 可选路径）：
+
+- `ogImageRenderTheme`：`"default"` | `"dust"` | `"custom"`
+- `ogImageRenderThemePath`：当为 `custom` 时必填，CSS 文件绝对路径
+
+示例（`openclaw.json`）：
+
+```json
+{
+  "channels": {
+    "onebot": {
+      "longMessageMode": "og_image",
+      "longMessageThreshold": 300,
+      "ogImageRenderTheme": "dust"
+    }
+  }
+}
+```
+
+自定义主题示例：
+
+```json
+{
+  "channels": {
+    "onebot": {
+      "longMessageMode": "og_image",
+      "ogImageRenderTheme": "custom",
+      "ogImageRenderThemePath": "C:/path/to/your-theme.css"
+    }
+  }
+}
+```
 
 ## 主动发送消息
 
@@ -142,7 +194,9 @@ openclaw message send --channel onebot --target group:987654321 --media "file://
 --userId ${userId} --username ${username} --groupId ${groupId}
 ```
 
-## 测试连接
+## 测试
+
+### 测试连接
 
 项目内提供测试脚本（需 `.env` 或环境变量）：
 
@@ -150,6 +204,22 @@ openclaw message send --channel onebot --target group:987654321 --media "file://
 cd openclaw-onebot
 npm run test:connect
 ```
+
+### 测试 OG 图片渲染效果
+
+用于预览「Markdown 转图片」在不同主题下的渲染效果（需安装 `node-html-to-image`）：
+
+```bash
+cd openclaw-onebot
+# 无额外样式
+npm run test:render-og-image -- default
+# 内置 dust 主题
+npm run test:render-og-image -- dust
+# 自定义 CSS 文件（绝对路径）
+npm run test:render-og-image -- "C:/path/to/your-theme.css"
+```
+
+生成图片保存在 `test/output-render-<主题>.png`，可直接打开查看。
 
 ## 参考
 

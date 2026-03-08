@@ -71,6 +71,16 @@
         "default": 300,
         "description": "长消息阈值（字符数），超过则启用 longMessageMode"
       },
+      "ogImageRenderTheme": {
+        "type": "string",
+        "enum": ["default", "dust", "custom"],
+        "default": "default",
+        "description": "长消息 og_image 时的渲染主题：default 无额外样式，dust 内置 dust 样式，custom 时需填写 ogImageRenderThemePath"
+      },
+      "ogImageRenderThemePath": {
+        "type": "string",
+        "description": "当 ogImageRenderTheme 为 custom 时，填写 CSS 文件绝对路径"
+      },
       "cronJobs": {
         "type": "array",
         "description": "内置定时任务（无 AI 介入，直接执行脚本并推送到群聊）",
@@ -97,6 +107,8 @@
     "host": { "label": "主机地址", "placeholder": "127.0.0.1" },
     "port": { "label": "端口", "placeholder": "8080" },
     "requireMention": { "label": "群聊需 @ 回复" },
-    "renderMarkdownToPlain": { "label": "Markdown 转纯文本" }
+    "renderMarkdownToPlain": { "label": "Markdown 转纯文本" },
+    "ogImageRenderTheme": { "label": "OG 图片渲染主题（default/dust/custom）" },
+    "ogImageRenderThemePath": { "label": "自定义 CSS 路径（仅当主题为 custom 时）" }
   }
 }

@@ -78,6 +78,18 @@ export function getWhitelistUserIds(cfg: any): number[] {
   return v.filter((x: unknown) => typeof x === "number" || (typeof x === "string" && /^\d+$/.test(x))).map((x) => Number(x));
 }
 
+/**
+ * OG 图片渲染主题：枚举 default（无额外样式）、dust（内置）、custom（使用 ogImageRenderThemePath）
+ * 返回用于 getMarkdownStyles 的值：default | dust | 自定义 CSS 绝对路径
+ */
+export function getOgImageRenderTheme(cfg: any): "default" | "dust" | string {
+  const v = cfg?.channels?.onebot?.ogImageRenderTheme;
+  const path = (cfg?.channels?.onebot?.ogImageRenderThemePath ?? "").trim();
+  if (v === "dust") return "dust";
+  if (v === "custom" && path.length > 0) return path;
+  return "default";
+}
+
 export function listAccountIds(apiOrCfg: any): string[] {
   const cfg = apiOrCfg?.config ?? apiOrCfg ?? (globalThis as any).__onebotGatewayConfig;
   const accounts = cfg?.channels?.onebot?.accounts;

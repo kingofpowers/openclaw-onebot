@@ -13,6 +13,7 @@ import { OneBotChannelPlugin } from "./channel.js";
 import { registerService } from "./service.js";
 import { startImageTempCleanup } from "./connection.js";
 import { startForwardCleanupTimer } from "./handlers/process-inbound.js";
+import { registerOneBotCli } from "./cli-commands.js";
 
 export default function register(api: any): void {
   (globalThis as any).__onebotApi = api;
@@ -27,11 +28,12 @@ export default function register(api: any): void {
       (ctx: any) => {
         const prog = ctx.program;
         if (prog && typeof prog.command === "function") {
-          const onebot = prog.command("onebot").description("OneBot 渠道配置");
+          const onebot = prog.command("onebot").description("OneBot 渠道配置与工具");
           onebot.command("setup").description("交互式配置 OneBot 连接参数").action(async () => {
             const { runOneBotSetup } = await import("./setup.js");
             await runOneBotSetup();
           });
+          registerOneBotCli(onebot, api);
         }
       },
       { commands: ["onebot"] }

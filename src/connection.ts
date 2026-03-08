@@ -5,6 +5,7 @@
  * 并定期清理临时文件。
  */
 
+import Fuse from "fuse.js";
 import WebSocket from "ws";
 import { createServer } from "http";
 import https from "https";
@@ -458,6 +459,57 @@ export async function getGroupMemberInfo(groupId: number, userId: number): Promi
     }
 }
 
+/** 群成员简要信息（用于列表与搜索） */
+export interface GroupMemberItem {
+    user_id: number;
+    nickname: string;
+    card: string;
+}
+
+/**
+ * 获取群成员列表（OneBot get_group_member_list）
+ */
+export async function getGroupMemberList(groupId: number): Promise<GroupMemberItem[]> {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return [];
+    try {
+        const res = await sendOneBotAction(ws, "get_group_member_list", { group_id: groupId });
+        if (res?.retcode !== 0 || !Array.isArray(res?.data)) return [];
+        return res.data.map((m: any) => ({
+            user_id: Number(m.user_id),
+            nickname: String(m.nickname ?? ""),
+            card: String(m.card ?? ""),
+        }));
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * 按名字模糊匹配群成员（匹配群名片 card 与昵称 nickname），返回匹配到的 QQ 与展示名。
+ * 使用 Fuse.js 模糊匹配，结果按相关度排序。
+ */
+export async function searchGroupMemberByName(
+    groupId: number,
+    name: string
+): Promise<Array<{ user_id: number; nickname: string; card: string; displayName: string }>> {
+    const list = await getGroupMemberList(groupId);
+    const keyword = (name || "").trim();
+    if (!keyword) return [];
+    const fuse = new Fuse(list, {
+        keys: ["card", "nickname"],
+        includeScore: true,
+        threshold: 0.4,
+        ignoreLocation: true,
+    });
+    const results = fuse.search(keyword);
+    return results.map(({ item: m }) => ({
+        user_id: m.user_id,
+        nickname: m.nickname,
+        card: m.card,
+        displayName: m.card || m.nickname || String(m.user_id),
+    }));
+}
+
 /** 获取群信息（含 group_name） */
 export async function getGroupInfo(groupId: number): Promise<{ group_name: string } | null> {
     if (!ws || ws.readyState !== WebSocket.OPEN) return null;
@@ -495,34 +547,116 @@ export async function getMsg(messageId: number): Promise<{
 }
 
 /**
- * 获取群聊历史消息（Lagrange.Core 扩展 API，go-cqhttp 等可能不支持）
+ * 获取群聊历史消息（Lagrange.Core 扩展 API，与 Lagrange.onebot context 一致）
+ * 仅使用 message_seq 分页（不传 message_id），与 Tiphareth getLast24HGroupMessages 调用方式一致。
  * @param groupId 群号
- * @param opts message_seq 起始序号；message_id 起始消息 ID；count 数量
+ * @param opts message_seq 起始序号（不传表示从最新一页）；count 本页条数；reverse_order true 表示从旧到新，便于用 batch[0].message_seq 向前翻页
  */
 export async function getGroupMsgHistory(
     groupId: number,
-    opts: { message_seq?: number; message_id?: number; count: number } = { count: 20 }
+    opts: { message_seq?: number; message_id?: number; count: number; reverse_order?: boolean } = { count: 20 }
 ): Promise<Array<{
     time: number;
     message_type: string;
     message_id: number;
-    real_id: number;
+    real_id?: number;
+    message_seq?: number;
     sender: { user_id?: number; nickname?: string };
     message: string | unknown[];
 }>> {
     if (!ws || ws.readyState !== WebSocket.OPEN) return [];
     try {
-        const res = await sendOneBotAction(ws, "get_group_msg_history", {
+        const params: Record<string, unknown> = {
             group_id: groupId,
-            message_seq: opts.message_seq,
-            message_id: opts.message_id,
             count: opts.count ?? 20,
-        });
+            reverse_order: opts.reverse_order !== false,
+        };
+        if (opts.message_seq != null && Number.isFinite(opts.message_seq)) {
+            params.message_seq = opts.message_seq;
+        }
+        const res = await sendOneBotAction(ws, "get_group_msg_history", params);
         if (res?.retcode === 0 && res?.data?.messages) return res.data.messages;
         return [];
     } catch {
         return [];
     }
+}
+
+/** 单页请求之间的延迟（毫秒），与 Tiphareth historyMessages 一致 */
+const HISTORY_PAGE_DELAY_MS = 500;
+
+/**
+ * 按时间范围分页获取群历史消息，严格对齐 Tiphareth getLast24HGroupMessages 算法：
+ * getGroupMsgHistory(groupId, messageSeq, chunkSize, true)，用 batch[0] 的 message_seq 向前翻页，去重与时间截断。
+ * @param groupId 群号
+ * @param opts startTime 仅保留 >= startTime 的消息（Unix 秒）；limit 最多条数；chunkSize 每页条数
+ */
+export async function getGroupMsgHistoryInRange(
+    groupId: number,
+    opts: { startTime?: number; limit?: number; chunkSize?: number } = {}
+): Promise<Array<{
+    time: number;
+    message_type: string;
+    message_id: number;
+    real_id?: number;
+    message_seq?: number;
+    sender: { user_id?: number; nickname?: string };
+    message: string | unknown[];
+}>> {
+    const { startTime = 0, limit = 3000, chunkSize = 100 } = opts;
+    let messageSeq: number | undefined = undefined;
+    const allMessages: Array<{
+        time: number;
+        message_type: string;
+        message_id: number;
+        real_id?: number;
+        message_seq?: number;
+        sender: { user_id?: number; nickname?: string };
+        message: string | unknown[];
+    }> = [];
+    const seenMessageIds = new Set<number>();
+    let stopLoop = false;
+    let pageCount = 0;
+
+    while (!stopLoop) {
+        pageCount++;
+
+        const batch = await getGroupMsgHistory(groupId, {
+            message_seq: messageSeq,
+            count: chunkSize,
+            reverse_order: true,
+        });
+
+        if (!batch.length) {
+            break;
+        }
+
+        await new Promise((r) => setTimeout(r, HISTORY_PAGE_DELAY_MS));
+
+        for (const msg of batch) {
+            if (seenMessageIds.has(msg.message_id)) continue;
+            seenMessageIds.add(msg.message_id);
+            if (msg.time < startTime) {
+                stopLoop = true;
+            } else {
+                allMessages.push(msg);
+            }
+        }
+
+        const oldest = batch[0];
+        const nextSeq = (oldest as { message_seq?: number }).message_seq ?? oldest.message_id;
+        if (nextSeq == null || nextSeq === messageSeq) {
+            break;
+        }
+        messageSeq = nextSeq;
+
+        if (allMessages.length >= limit) {
+            break;
+        }
+    }
+
+    allMessages.sort((a, b) => a.time - b.time);
+    return allMessages;
 }
 
 export async function connectForward(config: OneBotAccountConfig): Promise<WebSocket> {
