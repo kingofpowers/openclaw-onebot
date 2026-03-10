@@ -3,7 +3,7 @@
  */
 
 import type { OneBotMessage } from "../types.js";
-import { getOneBotConfig, isSkipMessage } from "../config.js";
+import { getOneBotConfig, isSkipMessage, hasDiscussionEndMarker } from "../config.js";
 import {
     getRawText,
     getTextFromSegments,
@@ -99,6 +99,12 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
     // 检查是否为排除消息（如 "An unknown error occurred"）
     if (isSkipMessage(messageText)) {
         api.logger?.info?.(`[onebot] skipping excluded message: ${messageText.slice(0, 50)}...`);
+        return;
+    }
+
+    // 检查是否包含讨论终止标记（【共识达成】、ℹ️）
+    if (hasDiscussionEndMarker(messageText)) {
+        api.logger?.info?.(`[onebot] skipping discussion-end message: ${messageText.slice(0, 50)}...`);
         return;
     }
 

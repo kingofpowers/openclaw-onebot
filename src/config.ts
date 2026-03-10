@@ -171,3 +171,25 @@ export function isSkipMessage(text: string, cfg?: any): boolean {
   const skipMessages = getSkipMessages(cfg);
   return skipMessages.some((skip) => text.includes(skip));
 }
+
+/** 讨论终止标记（AI用这些标记表示不想继续讨论） */
+const DISCUSSION_END_MARKERS = [
+  "【共识达成】",
+  "ℹ️",
+];
+
+/** 获取讨论终止标记列表 */
+export function getDiscussionEndMarkers(cfg?: any): string[] {
+  const c = cfg ?? getLiveConfig();
+  const v = c?.channels?.onebot?.discussionEndMarkers;
+  if (Array.isArray(v) && v.length > 0) {
+    return [...DISCUSSION_END_MARKERS, ...v];
+  }
+  return DISCUSSION_END_MARKERS;
+}
+
+/** 是否包含讨论终止标记 */
+export function hasDiscussionEndMarker(text: string, cfg?: any): boolean {
+  const markers = getDiscussionEndMarkers(cfg);
+  return markers.some((marker) => text.includes(marker));
+}
