@@ -228,6 +228,22 @@ openclaw message send --channel onebot --target group:987654321 --media "file://
 
 默认已排除常见错误消息，配置后会追加到默认列表。
 
+### 讨论终止标记
+
+多 Agent 群聊时，AI 可以在回复末尾添加标记来终止讨论循环：
+
+```json
+{
+  "channels": {
+    "onebot": {
+      "discussionEndMarkers": ["【共识达成】", "ℹ️"]
+    }
+  }
+}
+```
+
+当消息包含这些标记时，不会触发 AI 回复。默认已包含上述标记。
+
 ## 新人入群触发器
 
 如果有人入群之后，可以通过这个来实现触发器。
