@@ -38,6 +38,10 @@ const lastSentChunkCountBySession = new Map<string, number>();
 const FORWARD_PENDING_TTL_MS = 5 * 60 * 1000; // 5 分钟
 const FORWARD_CLEANUP_INTERVAL_MS = 60 * 1000; // 每分钟清理一次
 
+/** 缓存每个会话中 AI 回复过的消息：{ dedupeKey: { senderId: { text, replyTime } } } */
+const lastReplies = new Map<string, Record<number, { text: string; replyTime: number }>>();
+const LAST_REPLY_TTL_MS = 300000; // 5 分钟
+
 function cleanupForwardPendingSessions(): void {
     const now = Date.now();
     const toDelete: string[] = [];
@@ -109,7 +113,25 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
     }
 
     const isGroup = msg.message_type === "group";
+    const groupId = msg.group_id;
     const cfg = api.config;
+
+    // 获取有效账号 ID（用于去重和路由）
+    const effectiveAccountId = config.accountId ?? "default";
+    const userId = String(msg.user_id ?? 0);
+    const now = Date.now();
+
+    // 每个账号独立去重：不同账号可以分别响应同一条消息
+    const dedupeKey = isGroup ? `${effectiveAccountId}:group:${groupId}` : `${effectiveAccountId}:user:${userId}`;
+    const replyCache = lastReplies.get(dedupeKey) || {};
+    const userLastMsg = replyCache[Number(userId)];
+
+    // 检测是否为重复消息（5 分钟内相同用户发送相同内容）
+    if (userLastMsg && now - userLastMsg.replyTime < LAST_REPLY_TTL_MS && userLastMsg.text === messageText) {
+        api.logger?.info?.(`[onebot] skipping duplicate message from user ${userId}`);
+        return;
+    }
+
     const requireMention = (cfg?.channels?.onebot as any)?.requireMention ?? true;
 
     if (isGroup && requireMention && !isMentioned(msg, selfId)) {
@@ -531,6 +553,14 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
             else if (uid) await sendPrivateMsg(uid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}`);
         } catch (_) { }
     } finally {
+        // 记录此次处理（不管是否有回复）
+        const replyCache = lastReplies.get(dedupeKey) || {};
+        replyCache[Number(userId)] = {
+            text: messageText,
+            replyTime: Date.now(),
+        };
+        lastReplies.set(dedupeKey, replyCache);
+
         setForwardSuppressDelivery(false);
         setActiveReplySelfId(null);
         lastSentChunkCountBySession.delete(replySessionId);
