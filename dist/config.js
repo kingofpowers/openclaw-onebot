@@ -1,8 +1,58 @@
 /**
  * OneBot 配置解析
  */
+import { readFileSync, existsSync } from "fs";
+
+// 配置缓存（仅在文件变化时更新）
+let cachedConfig = null;
+
+/**
+ * 清除配置缓存（在检测到文件变化时调用）
+ */
+export function invalidateConfigCache() {
+    cachedConfig = null;
+}
+
+/**
+ * 从文件读取最新配置（仅在缓存失效时读取）
+ */
+export function getLiveConfig() {
+    if (cachedConfig) {
+        return cachedConfig;
+    }
+    
+    const possiblePaths = [
+        process.env.OPENCLAW_CONFIG,
+        "/home/node/.openclaw/openclaw.json",
+        "/app/openclaw.json",
+    ].filter(Boolean);
+    
+    for (const path of possiblePaths) {
+        try {
+            if (existsSync(path)) {
+                const content = readFileSync(path, "utf-8");
+                cachedConfig = JSON.parse(content);
+                return cachedConfig;
+            }
+        } catch {
+            continue;
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * 获取实时的 OneBot channel 配置（从文件读取，支持热加载）
+ */
+export function getLiveOneBotChannelConfig() {
+    const cfg = getLiveConfig();
+    return cfg?.channels?.onebot ?? {};
+}
+
 export function getOneBotConfig(api, accountId) {
-    const cfg = api?.config ?? globalThis.__onebotGatewayConfig;
+    // 使用实时配置（支持热加载）
+    const cfg = getLiveConfig() ?? api?.config ?? globalThis.__onebotGatewayConfig;
     const id = accountId ?? "default";
     const channel = cfg?.channels?.onebot;
     const account = channel?.accounts?.[id];
@@ -20,7 +70,8 @@ export function getOneBotConfig(api, accountId) {
             };
         }
     }
-    if (channel?.host && channel?.port) {
+    // 只有当请求 "default" 时才使用全局配置作为 fallback
+    if (id === "default" && channel?.host && channel?.port) {
         return {
             accountId: id,
             type: channel.type ?? "forward-websocket",
@@ -30,39 +81,74 @@ export function getOneBotConfig(api, accountId) {
             path: channel.path ?? "/onebot/v11/ws",
         };
     }
-    const type = process.env.ONEBOT_WS_TYPE;
-    const host = process.env.ONEBOT_WS_HOST;
-    const portStr = process.env.ONEBOT_WS_PORT;
-    const accessToken = process.env.ONEBOT_WS_ACCESS_TOKEN;
-    const path = process.env.ONEBOT_WS_PATH ?? "/onebot/v11/ws";
-    if (host && portStr) {
-        const port = parseInt(portStr, 10);
-        if (Number.isFinite(port)) {
-            return {
-                accountId: id,
-                type: type === "backward-websocket" ? "backward-websocket" : "forward-websocket",
-                host,
-                port,
-                accessToken: accessToken || undefined,
-                path,
-            };
-        }
-    }
     return null;
 }
+
+/** 默认排除的消息内容（不触发 AI 回复，不进入历史记录） */
+const DEFAULT_SKIP_MESSAGES = [
+    "An unknown error occurred",
+    "你好，我无法给到相关内容。",
+];
+
+/** 讨论终止标记（AI用这些标记表示不想继续讨论） */
+const DISCUSSION_END_MARKERS = [
+    "【共识达成】",
+    "ℹ️",
+];
+
+/** 获取排除消息列表 */
+export function getSkipMessages(cfg) {
+    const c = cfg ?? getLiveConfig();
+    const v = c?.channels?.onebot?.skipMessages;
+    if (Array.isArray(v) && v.length > 0) {
+        return [...DEFAULT_SKIP_MESSAGES, ...v];
+    }
+    return DEFAULT_SKIP_MESSAGES;
+}
+
+/** 获取讨论终止标记列表 */
+export function getDiscussionEndMarkers(cfg) {
+    const c = cfg ?? getLiveConfig();
+    const v = c?.channels?.onebot?.discussionEndMarkers;
+    if (Array.isArray(v) && v.length > 0) {
+        return [...DISCUSSION_END_MARKERS, ...v];
+    }
+    return DISCUSSION_END_MARKERS;
+}
+
+/** 是否为排除消息（精确匹配或包含） */
+export function isSkipMessage(text, cfg) {
+    if (!text?.trim()) return false;
+    const skipMessages = getSkipMessages(cfg);
+    const trimmed = text.trim();
+    return skipMessages.some(msg => 
+        trimmed === msg || trimmed.includes(msg)
+    );
+}
+
+/** 是否包含讨论终止标记 */
+export function hasDiscussionEndMarker(text, cfg) {
+    if (!text?.trim()) return false;
+    const markers = getDiscussionEndMarkers(cfg);
+    return markers.some(marker => text.includes(marker));
+}
+
 /** 是否将机器人回复中的 Markdown 渲染为纯文本再发送，默认 true */
 export function getRenderMarkdownToPlain(cfg) {
-    const v = cfg?.channels?.onebot?.renderMarkdownToPlain;
+    const c = cfg ?? getLiveConfig();
+    const v = c?.channels?.onebot?.renderMarkdownToPlain;
     return v === undefined ? true : Boolean(v);
 }
 /** 是否将连续多个换行压缩为单个换行，默认 true（AI 常输出 \n\n 导致双空行） */
 export function getCollapseDoubleNewlines(cfg) {
-    const v = cfg?.channels?.onebot?.collapseDoubleNewlines;
+    const c = cfg ?? getLiveConfig();
+    const v = c?.channels?.onebot?.collapseDoubleNewlines;
     return v === undefined ? true : Boolean(v);
 }
 /** 白名单 QQ 号列表，为空则所有人可回复；非空则仅白名单内用户可触发 AI */
 export function getWhitelistUserIds(cfg) {
-    const v = cfg?.channels?.onebot?.whitelistUserIds;
+    const c = cfg ?? getLiveConfig();
+    const v = c?.channels?.onebot?.whitelistUserIds;
     if (!Array.isArray(v))
         return [];
     return v.filter((x) => typeof x === "number" || (typeof x === "string" && /^\d+$/.test(x))).map((x) => Number(x));

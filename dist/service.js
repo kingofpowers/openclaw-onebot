@@ -1,7 +1,7 @@
 /**
  * OneBot WebSocket 服务（多账号支持）
  */
-import { getOneBotConfig, listAccountIds } from "./config.js";
+import { getOneBotConfig, listAccountIds, invalidateConfigCache, getDiscussionEndMarkers } from "./config.js";
 import { connectForward, createServerAndWait, addWs, removeWs, stopConnection, handleEchoResponse, startImageTempCleanup, stopImageTempCleanup, getWs } from "./connection.js";
 import { processInboundMessage } from "./handlers/process-inbound.js";
 import { handleGroupIncrease } from "./handlers/group-increase.js";
@@ -15,7 +15,9 @@ function getLogger(api) {
 
 let configWatcher = null;
 let lastReloadTime = 0;
+let configPollTimer = null;
 const RELOAD_DEBOUNCE_MS = 1000; // 防抖 1 秒
+const CONFIG_POLL_INTERVAL_MS = 5000; // 轮询间隔 5 秒
 
 /**
  * 为单个账号创建连接并设置消息处理
@@ -146,16 +148,19 @@ async function startConfigWatcher(api) {
     
     log.info?.(`[onebot] watching config file: ${configPath}`);
     
-    configWatcher = watch(configPath, (eventType) => {
-        if (eventType === "change") {
-            log.info?.(`[onebot] config file changed, triggering reload...`);
-            // 延迟一小段时间，确保文件写入完成
-            setTimeout(() => {
-                reloadConnections(api).catch((e) => {
-                    log.error?.(`[onebot] reload failed: ${e?.message}`);
-                });
-            }, 100);
-        }
+    // 启动轮询作为备选（Docker 环境中 fs.watch 可能不工作）
+    startConfigPoll(api);
+    
+    configWatcher = watch(configPath, { persistent: true, recursive: false }, (eventType) => {
+        log.info?.(`[onebot] config file event: ${eventType}`);
+        // rename 或 change 都触发重载（某些系统使用 rename）
+        invalidateConfigCache();
+        // 延迟一小段时间，确保文件写入完成
+        setTimeout(() => {
+            reloadConnections(api).catch((e) => {
+                log.error?.(`[onebot] reload failed: ${e?.message}`);
+            });
+        }, 100);
     });
     
     configWatcher.on("error", (e) => {
@@ -171,6 +176,41 @@ function stopConfigWatcher() {
         configWatcher.close();
         configWatcher = null;
     }
+    if (configPollTimer) {
+        clearInterval(configPollTimer);
+        configPollTimer = null;
+    }
+}
+
+/**
+ * 启动配置轮询（作为 fs.watch 的备选）
+ */
+function startConfigPoll(api) {
+    const log = getLogger(api);
+    let lastMtime = 0;
+    
+    const poll = async () => {
+        const configPath = await getConfigPath(api);
+        if (!configPath) return;
+        
+        try {
+            const { stat } = await import("fs/promises");
+            const stats = await stat(configPath);
+            const mtime = stats.mtimeMs;
+            
+            if (lastMtime > 0 && mtime > lastMtime) {
+                log.info?.(`[onebot] config file modified (poll detected), invalidating cache...`);
+                invalidateConfigCache();
+            }
+            lastMtime = mtime;
+        } catch (e) {
+            // ignore
+        }
+    };
+    
+    // 立即执行一次，获取初始 mtime
+    poll();
+    configPollTimer = setInterval(poll, CONFIG_POLL_INTERVAL_MS);
 }
 
 export function registerService(api) {
@@ -204,6 +244,14 @@ export function registerService(api) {
             
             const successCount = results.filter(Boolean).length;
             log.info?.(`[onebot] ${successCount}/${accountIds.length} connection(s) established`);
+            
+            // 检查讨论终止标记配置，提醒用户在 SOUL.md 中添加说明
+            const markers = getDiscussionEndMarkers();
+            if (markers.length > 0) {
+                log.warn?.(`[onebot] ⚠️ 讨论终止标记已配置: ${markers.join(", ")}`);
+                log.warn?.(`[onebot] ⚠️ 请确保在每个 agent 的 SOUL.md 中添加讨论控制说明，否则 AI 不知道如何使用这些标记！`);
+                log.warn?.(`[onebot] 参考 README 中的 "讨论/多 Agent 控制配置" 章节`);
+            }
             
             // 启动配置文件热加载监听
             startConfigWatcher(api).catch((e) => {

@@ -224,11 +224,12 @@ export async function waitForConnection(accountId = "default", timeoutMs = 30000
  */
 export async function ensureConnection(getConfig, accountId = "default", timeoutMs = 30000) {
     const ws = wsMap.get(accountId);
-    if (ws && ws.readyState === WebSocket.OPEN)
+    if (ws && ws.readyState === WebSocket.OPEN) {
         return ws;
+    }
     const config = getConfig();
     if (!config)
-        throw new Error("OneBot not configured");
+        throw new Error(`OneBot not configured for accountId=${accountId}`);
     const log = getLogger();
     if (config.type === "forward-websocket") {
         log.info?.(`[onebot] 连接 OneBot (forward-websocket, accountId=${accountId})...`);
@@ -275,6 +276,7 @@ export async function sendGroupMsg(groupId, text, getConfig, accountId = "defaul
         textLen: text?.length,
         sessionId: getActiveReplyTarget(),
         replySessionId: getActiveReplySessionId(),
+        accountId,
     });
     const socket = getConfig
         ? await ensureConnection(getConfig, accountId)

@@ -1,9 +1,8 @@
 /**
  * 入站消息处理
  */
-import { getOneBotConfig } from "../config.js";
+import { getOneBotConfig, getLiveConfig, getLiveOneBotChannelConfig, getRenderMarkdownToPlain, getCollapseDoubleNewlines, getWhitelistUserIds, isSkipMessage, hasDiscussionEndMarker } from "../config.js";
 import { getRawText, getTextFromSegments, getReplyMessageId, getTextFromMessageContent, isMentioned, } from "../message.js";
-import { getRenderMarkdownToPlain, getCollapseDoubleNewlines, getWhitelistUserIds } from "../config.js";
 import { markdownToPlain, collapseDoubleNewlines } from "../markdown.js";
 import { markdownToImage } from "../og-image.js";
 import { sendPrivateMsg, sendGroupMsg, sendPrivateImage, sendGroupImage, sendGroupForwardMsg, sendPrivateForwardMsg, setMsgEmojiLike, getMsg, getGroupMsgHistory, } from "../connection.js";
@@ -12,6 +11,9 @@ import { loadPluginSdk, getSdk } from "../sdk.js";
 import { handleGroupIncrease } from "./group-increase.js";
 const DEFAULT_HISTORY_LIMIT = 20;
 export const sessionHistories = new Map();
+/** 缓存每个会话中 AI 回复过的消息：{ senderId: { text: string, replyTime: number } } */
+const lastReplies = new Map();
+const LAST_REPLY_TTL_MS = 300000; // 5 分钟
 /** 追踪每个群最后一次机器人回复的消息 ID，用于获取历史消息时定位起点 */
 const lastBotReplyMsgId = new Map();
 /** forward 模式下待处理的会话，用于定期清理未完成的缓冲 */
@@ -46,6 +48,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     }
     const config = getOneBotConfig(api, accountId);
     const effectiveAccountId = config?.accountId ?? accountId ?? "default";
+    
     if (!config) {
         api.logger?.warn?.("[onebot] not configured");
         return;
@@ -78,9 +81,55 @@ export async function processInboundMessage(api, msg, accountId = "default") {
         api.logger?.info?.(`[onebot] ignoring empty message`);
         return;
     }
+    
+    // 检查是否为排除消息（如 "An unknown error occurred"）
+    if (isSkipMessage(messageText)) {
+        api.logger?.info?.(`[onebot] skipping excluded message: ${messageText.slice(0, 50)}...`);
+        return;
+    }
+    
+    // 检查是否包含讨论终止标记（【共识达成】、【仅供参考】）
+    if (hasDiscussionEndMarker(messageText)) {
+        api.logger?.info?.(`[onebot] skipping discussion-end message: ${messageText.slice(0, 50)}...`);
+        return;
+    }
+    
+    // 检测重复错误消息，避免 AI 循环回复
+    const errorPatterns = [
+        /an unknown error occurred/i,
+        /处理失败/i,
+        /无法给到相关内容/i,
+        /我无法/i,
+        /error/i,
+        /错误/i,
+    ];
+    const isErrorLike = errorPatterns.some(p => p.test(messageText));
+    
     const isGroup = msg.message_type === "group";
     const groupId = msg.group_id;
-    const cfg = api.config;
+    const userId = String(msg.user_id ?? 0);
+    const now = Date.now();
+    
+    // 每个账号独立去重：不同账号可以分别响应同一条消息
+    const dedupeKey = isGroup ? `${effectiveAccountId}:group:${groupId}` : `${effectiveAccountId}:user:${userId}`;
+    const replyCache = lastReplies.get(dedupeKey) || {};
+    const userLastMsg = replyCache[userId];
+    
+    // 对于普通消息：如果已经回复过相同内容，跳过（避免重复响应）
+    // 对于错误消息：总是跳过重复
+    if (userLastMsg && userLastMsg.text === messageText) {
+        const timeDiff = now - userLastMsg.replyTime;
+        // 普通消息：5 分钟内重复才跳过
+        // 错误消息：始终跳过
+        if (isErrorLike || timeDiff < LAST_REPLY_TTL_MS) {
+            api.logger?.info?.(`[onebot] skipping duplicate message from ${userId} in ${dedupeKey} (errorLike=${isErrorLike}, timeDiff=${timeDiff}ms)`);
+            return;
+        }
+    }
+    
+    
+    // 从文件读取最新配置（支持热加载）
+    const cfg = getLiveConfig() ?? api.config;
     const onebotCfg = cfg?.channels?.onebot ?? {};
     const accountConfig = onebotCfg.accounts?.[effectiveAccountId] ?? {};
     
@@ -106,7 +155,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
         api.logger?.info?.(`[onebot] ignoring group message without @mention`);
         return;
     }
-    const gi = cfg?.channels?.onebot?.groupIncrease;
+    const gi = onebotCfg.groupIncrease;
     // 测试欢迎：@ 机器人并发送 /group-increase，模拟当前发送者入群，触发欢迎（使用该人的 id、nickname 等）
     // 使用 getTextFromSegments 提取纯文本，避免 raw_message 中 [CQ:at,qq=xxx] 等 CQ 码导致匹配失败
     const cmdText = getTextFromSegments(msg).trim() || messageText.trim();
@@ -129,8 +178,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
     if (/^\/[a-zA-Z0-9_-]+$/.test(cmdText)) {
         messageText = cmdText;
     }
-    const userId = msg.user_id;
-    const whitelist = getWhitelistUserIds(cfg);
+    const whitelist = getWhitelistUserIds();
     const getConfig = () => getOneBotConfig(api, effectiveAccountId);
     if (whitelist.length > 0 && !whitelist.includes(Number(userId))) {
         const denyMsg = "权限不足，请向管理员申请权限";
@@ -296,7 +344,7 @@ export async function processInboundMessage(api, msg, accountId = "default") {
                         const senderName = m.sender?.nickname ?? m.sender?.card ?? senderId;
                         return { senderId, senderName, text, timestamp: m.time };
                     })
-                    .filter((m) => m.text && !m.text.trim().startsWith('/'));
+                    .filter((m) => m.text && !m.text.trim().startsWith('/') && !isSkipMessage(m.text) && !hasDiscussionEndMarker(m.text));
                 api.logger?.info?.(`[onebot] fetched ${historyContext.length} history messages for group ${groupId}`);
             }
         }
@@ -472,9 +520,9 @@ export async function processInboundMessage(api, msg, accountId = "default") {
                     const groupMatch = sessionKey.match(/^onebot:group:(\d+)$/i);
                     const effectiveIsGroup = groupMatch != null || Boolean(ig);
                     const effectiveGroupId = (groupMatch ? parseInt(groupMatch[1], 10) : undefined) ?? gid;
-                    const usePlain = getRenderMarkdownToPlain(cfg);
+                    const usePlain = getRenderMarkdownToPlain();
                     let textPlain = usePlain ? markdownToPlain(trimmed) : trimmed;
-                    if (getCollapseDoubleNewlines(cfg))
+                    if (getCollapseDoubleNewlines())
                         textPlain = collapseDoubleNewlines(textPlain);
                     deliveredChunks.push({
                         index: chunkIndex++,
@@ -639,6 +687,16 @@ export async function processInboundMessage(api, msg, accountId = "default") {
         catch (_) { }
     }
     finally {
+        // 记录此次处理（不管是否有回复）
+        // 每个账号独立去重：使用与检测时相同的 key
+        const dedupeKey = isGroup ? `${effectiveAccountId}:group:${groupId}` : `${effectiveAccountId}:user:${userId}`;
+        const replyCache = lastReplies.get(dedupeKey) || {};
+        replyCache[userId] = {
+            text: messageText,
+            replyTime: Date.now(),
+        };
+        lastReplies.set(dedupeKey, replyCache);
+        
         setForwardSuppressDelivery(false);
         setActiveReplySelfId(null);
         lastSentChunkCountBySession.delete(replySessionId);
