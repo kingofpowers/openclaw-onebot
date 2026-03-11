@@ -26,6 +26,7 @@
 - ✅ 自动获取上下文
 - ✅ 新成员入群欢迎
 - ✅ 自动合并转发长消息
+- ✅ normal 模式准流式回复：按短时间窗口聚合后增量发送，避免等到最后一次性吐出
 - ✅ **长消息生成图片**：超过阈值可将 Markdown 渲染为图片发送（可选主题：default / dust / custom 自定义 CSS）
 - ✅ 支持文件，图像读取/上传
 - ✅ 支持白名单系统
@@ -73,9 +74,28 @@ openclaw onebot setup
 
 | 模式 | 说明 |
 |------|------|
-| `normal` | 正常分段发送 |
+| `normal` | 准流式分段发送：边生成边聚合，按时间窗口或长度阈值增量发送 |
 | `og_image` | 将 Markdown 转为 HTML 再生成图片发送（需安装 `node-html-to-image`） |
 | `forward` | 合并转发（发给自己后打包转发） |
+
+`normal` 模式默认会开启块流式接收，并在插件侧做短时间聚合，默认规则：
+
+- `normalModeFlushIntervalMs`: `1200`
+- `normalModeFlushChars`: `160`
+
+也就是回复不会逐 token 刷屏，而是大约每 1.2 秒或累计到 160 字左右就发送一段。可在 `openclaw.json` 中手动调整：
+
+```json
+{
+  "channels": {
+    "onebot": {
+      "longMessageMode": "normal",
+      "normalModeFlushIntervalMs": 1200,
+      "normalModeFlushChars": 160
+    }
+  }
+}
+```
 
 选择 **生成图片发送（og_image）** 时，会额外询问**渲染主题**：
 
