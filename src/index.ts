@@ -14,6 +14,7 @@ import { registerService } from "./service.js";
 import { startImageTempCleanup } from "./connection.js";
 import { startForwardCleanupTimer } from "./handlers/process-inbound.js";
 import { registerOneBotCli } from "./cli-commands.js";
+import { registerTools } from "./tools.js";
 
 export default function register(api: any): void {
   (globalThis as any).__onebotApi = api;
@@ -38,6 +39,11 @@ export default function register(api: any): void {
       },
       { commands: ["onebot"] }
     );
+  }
+
+  // 注册 Agent 工具（onebot_get_group_msg_history 等）
+  if (typeof api.registerTool === "function") {
+    registerTools(api);
   }
 
   registerService(api);

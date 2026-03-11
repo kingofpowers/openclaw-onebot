@@ -116,6 +116,7 @@ export async function processInboundMessage(api: any, msg: OneBotMessage, accoun
     const isGroup = msg.message_type === "group";
     const groupId = msg.group_id;
     const cfg = api.config;
+    const onebotChannel = cfg?.channels?.onebot as Record<string, unknown> | undefined;
 
     // 获取有效账号 ID（用于去重和路由）
     const effectiveAccountId = config.accountId ?? "default";
@@ -133,10 +134,46 @@ export async function processInboundMessage(api: any, msg: OneBotMessage, accoun
         return;
     }
 
-    const requireMention = (cfg?.channels?.onebot as any)?.requireMention ?? true;
+    // 获取 requireMention 配置，按优先级检查：
+    // 1. accounts[accountId].groups[groupId].requireMention
+    // 2. accounts[accountId].requireMention
+    // 3. groups[groupId].requireMention
+    // 4. 全局 requireMention
+    // 5. 默认 true
+    function getRequireMention(
+        channel: Record<string, unknown> | undefined,
+        accountId: string,
+        groupId: number | undefined
+    ): boolean {
+        const accounts = channel?.accounts as Record<string, Record<string, unknown>> | undefined;
+        const groups = channel?.groups as Record<string, Record<string, unknown>> | undefined;
+        const account = accounts?.[accountId];
+        const accountGroups = account?.groups as Record<string, Record<string, unknown>> | undefined;
+
+        // 1. accounts[accountId].groups[groupId].requireMention
+        if (groupId != null && accountGroups?.[String(groupId)]?.requireMention !== undefined) {
+            return Boolean(accountGroups[String(groupId)].requireMention);
+        }
+        // 2. accounts[accountId].requireMention
+        if (account?.requireMention !== undefined) {
+            return Boolean(account.requireMention);
+        }
+        // 3. groups[groupId].requireMention
+        if (groupId != null && groups?.[String(groupId)]?.requireMention !== undefined) {
+            return Boolean(groups[String(groupId)].requireMention);
+        }
+        // 4. 全局 requireMention
+        if (channel?.requireMention !== undefined) {
+            return Boolean(channel.requireMention);
+        }
+        // 5. 默认 true
+        return true;
+    }
+
+    const requireMention = getRequireMention(onebotChannel, effectiveAccountId, groupId);
 
     if (isGroup && requireMention && !isMentioned(msg, selfId)) {
-        api.logger?.info?.(`[onebot] ignoring group message without @mention`);
+        api.logger?.info?.(`[onebot] ignoring group message without @mention (accountId=${effectiveAccountId}, groupId=${groupId})`);
         return;
     }
 
