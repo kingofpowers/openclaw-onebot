@@ -72,7 +72,7 @@ export async function processInboundMessage(api: any, msg: OneBotMessage, accoun
         api.logger?.warn?.(`[onebot] not configured (accountId=${accountId ?? "default"})`);
         return;
     }
-    const effectiveAccountId = config.accountId;
+    const effectiveAccountId = config.accountId ?? "default";
 
     const selfId = msg.self_id ?? 0;
     if (msg.user_id != null && Number(msg.user_id) === Number(selfId)) {
@@ -119,7 +119,6 @@ export async function processInboundMessage(api: any, msg: OneBotMessage, accoun
     const onebotChannel = cfg?.channels?.onebot as Record<string, unknown> | undefined;
 
     // 获取有效账号 ID（用于去重和路由）
-    const effectiveAccountId = config.accountId ?? "default";
     const userId = String(msg.user_id ?? 0);
     const now = Date.now();
 
@@ -193,19 +192,18 @@ export async function processInboundMessage(api: any, msg: OneBotMessage, accoun
         return;
     }
 
-    const userId = msg.user_id!;
+    const uid = msg.user_id!;
     const whitelist = getWhitelistUserIds(cfg);
-    if (whitelist.length > 0 && !whitelist.includes(Number(userId))) {
+    if (whitelist.length > 0 && !whitelist.includes(Number(uid))) {
         const denyMsg = "权限不足，请向管理员申请权限";
         const getConfig = () => getOneBotConfig(api, effectiveAccountId);
         try {
             if (msg.message_type === "group" && msg.group_id) await sendGroupMsg(msg.group_id, denyMsg, getConfig);
-            else await sendPrivateMsg(userId, denyMsg, getConfig);
+            else await sendPrivateMsg(uid, denyMsg, getConfig);
         } catch (_) {}
-        api.logger?.info?.(`[onebot] user ${userId} not in whitelist, denied`);
+        api.logger?.info?.(`[onebot] user ${uid} not in whitelist, denied`);
         return;
     }
-    const groupId = msg.group_id;
     const sessionId = isGroup
         ? `onebot:group:${groupId}`.toLowerCase()
         : `onebot:${userId}`.toLowerCase();
@@ -536,6 +534,9 @@ export async function processInboundMessage(api: any, msg: OneBotMessage, accoun
                                             if (c.text || c.mediaUrl) await doSendChunk(effectiveIsGroup, effectiveGroupId, uid, c.text ?? "", c.mediaUrl);
                                         }
                                     }
+                                } else if (shouldSendNow) {
+                                    // normal 模式下消息已在上面发送，这里只更新计数
+                                    // 无需再次发送
                                 } else {
                                     setForwardSuppressDelivery(false);
                                     for (const c of deliveredChunks) {
