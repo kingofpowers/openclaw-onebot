@@ -65,10 +65,26 @@ export function getRenderMarkdownToPlain(cfg: any): boolean {
   return v === undefined ? true : Boolean(v);
 }
 
+function getFiniteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
 /** 是否将连续多个换行压缩为单个换行，默认 true（AI 常输出 \n\n 导致双空行） */
 export function getCollapseDoubleNewlines(cfg: any): boolean {
   const v = cfg?.channels?.onebot?.collapseDoubleNewlines;
   return v === undefined ? true : Boolean(v);
+}
+
+/** normal 模式下聚合发送的等待窗口，默认 1200ms */
+export function getNormalModeFlushIntervalMs(cfg: any): number {
+  const value = getFiniteNumber(cfg?.channels?.onebot?.normalModeFlushIntervalMs, 1200);
+  return Math.max(200, Math.min(5000, Math.round(value)));
+}
+
+/** normal 模式下聚合发送的字符阈值，达到后提前 flush，默认 160 */
+export function getNormalModeFlushChars(cfg: any): number {
+  const value = getFiniteNumber(cfg?.channels?.onebot?.normalModeFlushChars, 160);
+  return Math.max(20, Math.min(2000, Math.round(value)));
 }
 
 /** 白名单 QQ 号列表，为空则所有人可回复；非空则仅白名单内用户可触发 AI */

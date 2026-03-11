@@ -11,7 +11,14 @@ import {
     getTextFromMessageContent,
     isMentioned,
 } from "../message.js";
-import { getRenderMarkdownToPlain, getCollapseDoubleNewlines, getWhitelistUserIds, getOgImageRenderTheme } from "../config.js";
+import {
+    getRenderMarkdownToPlain,
+    getCollapseDoubleNewlines,
+    getWhitelistUserIds,
+    getOgImageRenderTheme,
+    getNormalModeFlushIntervalMs,
+    getNormalModeFlushChars,
+} from "../config.js";
 import { markdownToPlain, collapseDoubleNewlines } from "../markdown.js";
 import { markdownToImage } from "../og-image.js";
 import {
@@ -268,6 +275,8 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
 
     const longMessageMode = (onebotCfg.longMessageMode as "normal" | "og_image" | "forward") ?? "normal";
     const longMessageThreshold = (onebotCfg.longMessageThreshold as number) ?? 300;
+    const normalModeFlushIntervalMs = getNormalModeFlushIntervalMs(cfg);
+    const normalModeFlushChars = getNormalModeFlushChars(cfg);
 
     const replySessionId = `onebot-reply-${Date.now()}-${sessionId}`;
     setActiveReplyTarget(replyTarget);
@@ -277,10 +286,33 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
 
     const deliveredChunks: Array<{ index: number; text?: string; rawText?: string; mediaUrl?: string }> = [];
     let chunkIndex = 0;
+    let normalModeBufferedText = "";
+    let normalModeBufferedRawText = "";
+    let normalModeFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    let normalModeFlushChain: Promise<void> = Promise.resolve();
 
     const getConfig = () => getOneBotConfig(api);
 
     const onReplySessionEnd = onebotCfg.onReplySessionEnd as string | ((ctx: ReplySessionContext) => void | Promise<void>) | undefined;
+    const normalModePunctuationFlushMinChars = 24;
+
+    const clearNormalModeFlushTimer = () => {
+        if (normalModeFlushTimer) {
+            clearTimeout(normalModeFlushTimer);
+            normalModeFlushTimer = null;
+        }
+    };
+
+    const hasBufferedNormalModeText = () => normalModeBufferedText.length > 0 || normalModeBufferedRawText.length > 0;
+
+    const queueNormalModeFlush = (action: () => Promise<void>): Promise<void> => {
+        normalModeFlushChain = normalModeFlushChain
+            .then(action)
+            .catch((e: any) => {
+                api.logger?.error?.(`[onebot] normal-mode flush failed: ${e?.message ?? e}`);
+            });
+        return normalModeFlushChain;
+    };
 
     const doSendChunk = async (
         effectiveIsGroup: boolean,
@@ -297,6 +329,58 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
             if (effectiveIsGroup && effectiveGroupId) await sendGroupImage(effectiveGroupId, mediaUrl, api.logger, getConfig);
             else if (uid) await sendPrivateImage(uid, mediaUrl, api.logger, getConfig);
         }
+    };
+
+    const flushBufferedNormalModeText = async (
+        effectiveIsGroup: boolean,
+        effectiveGroupId: number | undefined,
+        uid: number | undefined
+    ): Promise<void> => {
+        clearNormalModeFlushTimer();
+        if (!hasBufferedNormalModeText()) return;
+
+        const text = normalModeBufferedText;
+        const rawText = normalModeBufferedRawText;
+        normalModeBufferedText = "";
+        normalModeBufferedRawText = "";
+
+        await doSendChunk(effectiveIsGroup, effectiveGroupId, uid, text, undefined);
+        deliveredChunks.push({
+            index: chunkIndex++,
+            text: text || undefined,
+            rawText: rawText || undefined,
+        });
+    };
+
+    const scheduleNormalModeFlush = (
+        effectiveIsGroup: boolean,
+        effectiveGroupId: number | undefined,
+        uid: number | undefined
+    ) => {
+        if (normalModeFlushTimer) return;
+        normalModeFlushTimer = setTimeout(() => {
+            void queueNormalModeFlush(() => flushBufferedNormalModeText(effectiveIsGroup, effectiveGroupId, uid));
+        }, normalModeFlushIntervalMs);
+    };
+
+    const shouldFlushNormalModeBuffer = (): boolean => {
+        const rawText = normalModeBufferedRawText || normalModeBufferedText;
+        if (!rawText) return false;
+        if (normalModeBufferedText.length >= normalModeFlushChars) return true;
+        if (rawText.length < normalModePunctuationFlushMinChars) return false;
+        return /[.!?。！？]\s*$/.test(rawText);
+    };
+
+    const appendNormalModeText = (current: string, next: string): string => {
+        if (!current) return next;
+        if (!next) return current;
+
+        const lastChar = current[current.length - 1];
+        const firstChar = next[0];
+        if (/[A-Za-z0-9]/.test(lastChar) && /[A-Za-z0-9]/.test(firstChar)) {
+            return `${current} ${next}`;
+        }
+        return `${current}${next}`;
     };
 
     try {
@@ -323,14 +407,16 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
                     let textPlain = usePlain ? markdownToPlain(trimmed) : trimmed;
                     if (getCollapseDoubleNewlines(cfg)) textPlain = collapseDoubleNewlines(textPlain);
 
-                    deliveredChunks.push({
-                        index: chunkIndex++,
-                        text: textPlain || undefined,
-                        rawText: trimmed || undefined,
-                        mediaUrl: mediaUrl || undefined,
-                    });
-
                     const shouldSendNow = longMessageMode === "normal";
+
+                    if (!shouldSendNow) {
+                        deliveredChunks.push({
+                            index: chunkIndex++,
+                            text: textPlain || undefined,
+                            rawText: trimmed || undefined,
+                            mediaUrl: mediaUrl || undefined,
+                        });
+                    }
 
                     // forward 模式且非最后一条：仅暂存，绝不发送，等 final 时再统一处理
                     if (longMessageMode === "forward" && info.kind !== "final") {
@@ -343,9 +429,33 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
 
                     try {
                         if (shouldSendNow) {
-                            await doSendChunk(effectiveIsGroup, effectiveGroupId, uid, textPlain, mediaUrl);
+                            if (mediaUrl) {
+                                await queueNormalModeFlush(async () => {
+                                    await flushBufferedNormalModeText(effectiveIsGroup, effectiveGroupId, uid);
+                                    await doSendChunk(effectiveIsGroup, effectiveGroupId, uid, textPlain, mediaUrl);
+                                    deliveredChunks.push({
+                                        index: chunkIndex++,
+                                        text: textPlain || undefined,
+                                        rawText: trimmed || undefined,
+                                        mediaUrl: mediaUrl || undefined,
+                                    });
+                                });
+                            } else {
+                                normalModeBufferedText = appendNormalModeText(normalModeBufferedText, textPlain);
+                                normalModeBufferedRawText = appendNormalModeText(normalModeBufferedRawText, trimmed);
+
+                                if (shouldFlushNormalModeBuffer()) {
+                                    await queueNormalModeFlush(() => flushBufferedNormalModeText(effectiveIsGroup, effectiveGroupId, uid));
+                                } else {
+                                    scheduleNormalModeFlush(effectiveIsGroup, effectiveGroupId, uid);
+                                }
+                            }
                         }
                         if (info.kind === "final") {
+                            if (shouldSendNow) {
+                                await queueNormalModeFlush(() => flushBufferedNormalModeText(effectiveIsGroup, effectiveGroupId, uid));
+                            }
+
                             const lastSentCount = lastSentChunkCountBySession.get(replySessionId) ?? 0;
                             const chunksToSend = deliveredChunks.slice(lastSentCount);
                             if (chunksToSend.length === 0) return;
@@ -508,7 +618,7 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
                     await clearEmojiReaction();
                 },
             },
-            replyOptions: { disableBlockStreaming: true },
+            replyOptions: { disableBlockStreaming: longMessageMode !== "normal" },
         });
     } catch (err: any) {
         await clearEmojiReaction();
@@ -519,6 +629,7 @@ export async function processInboundMessage(api: any, msg: OneBotMessage): Promi
             else if (uid) await sendPrivateMsg(uid, `处理失败: ${err?.message?.slice(0, 80) || "未知错误"}`);
         } catch (_) { }
     } finally {
+        clearNormalModeFlushTimer();
         setForwardSuppressDelivery(false);
         setActiveReplySelfId(null);
         lastSentChunkCountBySession.delete(replySessionId);
